@@ -42,8 +42,9 @@ func TestMergeMovesDashboard(t *testing.T) {
 	if upd["HTTPPort"] != dashboardPort || upd["HTTPPassword"] != "pw" {
 		t.Fatalf("Update = %v", upd)
 	}
-	// breakglass is removed; ramekind is added; gk-lockscreen is optional.
-	if pkgs := cfg["Packages"].([]any); len(pkgs) != 1 || pkgs[0] != ramekindPkg {
+	// breakglass, a development tool, is kept on a local device; ramekind is
+	// added; gk-lockscreen is optional.
+	if pkgs := cfg["Packages"].([]any); len(pkgs) != 2 || pkgs[0] != "github.com/gokrazy/breakglass" || pkgs[1] != ramekindPkg {
 		t.Fatalf("Packages = %v", pkgs)
 	}
 	// A deliberately chosen port is respected.
@@ -230,7 +231,7 @@ func TestEnforcePackages(t *testing.T) {
 		"github.com/ascension-association/gk-network":  false,
 		"kernel.rpi": false,
 	} {
-		if allowedPackage(pkg) != want {
+		if allowedPackage(pkg, true) != want {
 			t.Errorf("allowedPackage(%s) = %v", pkg, !want)
 		}
 	}
@@ -244,7 +245,7 @@ func TestEnforcePackages(t *testing.T) {
 			"github.com/gokrazy/gokrazy/cmd/randomd": map[string]any{},
 		},
 	}
-	removed, added, err := enforcePackages(cfg)
+	removed, added, err := enforcePackages(cfg, true)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -265,18 +266,18 @@ func TestEnforcePackages(t *testing.T) {
 		t.Error("gokrazy system service config removed")
 	}
 	// Enforcing again changes nothing.
-	if r, a, _ := enforcePackages(cfg); len(r)+len(a) != 0 {
+	if r, a, _ := enforcePackages(cfg, false); len(r)+len(a) != 0 {
 		t.Fatalf("not idempotent: %v %v", r, a)
 	}
 
 	// Unset KernelPackage means gok's default kernel; empty or non-kernel
 	// values are refused.
-	if _, _, err := enforcePackages(map[string]any{"Packages": []any{ramekindPkg, lockscreenPkg}}); err != nil {
+	if _, _, err := enforcePackages(map[string]any{"Packages": []any{ramekindPkg, lockscreenPkg}}, false); err != nil {
 		t.Errorf("unset KernelPackage: %v", err)
 	}
 	for _, k := range []any{"", "github.com/gokrazy/breakglass", 42} {
 		bad := map[string]any{"Packages": []any{ramekindPkg, lockscreenPkg}, "KernelPackage": k}
-		if _, _, err := enforcePackages(bad); err == nil {
+		if _, _, err := enforcePackages(bad, false); err == nil {
 			t.Errorf("KernelPackage %v accepted", k)
 		}
 	}
@@ -284,12 +285,28 @@ func TestEnforcePackages(t *testing.T) {
 
 func TestLockscreenOptional(t *testing.T) {
 	cfg := map[string]any{"KernelPackage": "github.com/gokrazy/kernel.rpi", "Packages": []any{ramekindPkg}}
-	removed, added, err := enforcePackages(cfg)
+	removed, added, err := enforcePackages(cfg, false)
 	if err != nil || len(removed)+len(added) != 0 {
 		t.Fatalf("ramekind alone: removed=%v added=%v err=%v", removed, added, err)
 	}
 	cfg["Packages"] = []any{lockscreenPkg}
-	if _, added, _ := enforcePackages(cfg); strings.Join(added, " ") != ramekindPkg {
+	if _, added, _ := enforcePackages(cfg, false); strings.Join(added, " ") != ramekindPkg {
 		t.Fatalf("added = %v; want only ramekind", added)
+	}
+}
+
+func TestDevPackagesOnlyOnLocalDevices(t *testing.T) {
+	cfg := func() map[string]any {
+		return map[string]any{"Packages": []any{ramekindPkg, "github.com/gokrazy/breakglass", "github.com/gokrazy/fbstatus", "github.com/gokrazy/hello", "github.com/gokrazy/serial-busybox", "github.com/example/other"}}
+	}
+	local := cfg()
+	removed, _, err := enforcePackages(local, false)
+	if err != nil || strings.Join(removed, " ") != "github.com/example/other" || len(local["Packages"].([]any)) != 5 {
+		t.Fatalf("local device: removed %v, kept %v, %v", removed, local["Packages"], err)
+	}
+	fleet := cfg()
+	removed, _, err = enforcePackages(fleet, true)
+	if err != nil || len(removed) != 5 || len(fleet["Packages"].([]any)) != 1 {
+		t.Fatalf("fleet image: removed %v, kept %v, %v", removed, fleet["Packages"], err)
 	}
 }

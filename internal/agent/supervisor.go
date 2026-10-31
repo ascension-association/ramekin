@@ -49,6 +49,11 @@ type Supervisor struct {
 	state State
 	run   *runner
 
+	// holdRollback stops Boot from rolling the app back when it fails its
+	// health check: on a firmware test boot, the firmware is what's on trial.
+	holdRollback bool
+	bootHealthy  bool
+
 	// snap is a copy of state taken at every save, so State never waits for
 	// a trial that holds mu.
 	smu  sync.Mutex
@@ -107,6 +112,22 @@ func (s *Supervisor) setApp(f func(*AppStatus)) {
 	f(&s.app)
 }
 
+// HoldRollback makes Boot report an unhealthy app instead of rolling it
+// back. Call it before Boot.
+func (s *Supervisor) HoldRollback() {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	s.holdRollback = true
+}
+
+// BootHealthy reports whether the app passed its health check at boot (or
+// there was none to run).
+func (s *Supervisor) BootHealthy() bool {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	return s.bootHealthy
+}
+
 // Boot resumes after power-on: it finishes or abandons an interrupted trial,
 // then starts the current release, falling back to the previous one if the
 // current release no longer passes its health check.
@@ -138,11 +159,12 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 	cur := s.state.Current
 	if cur == nil {
 		s.o.Log.Print("no release installed yet; waiting for a push or channel update")
+		s.bootHealthy = true
 		return nil
 	}
 	s.o.Log.Printf("starting %s", cur.Version)
 	proc, err := s.startHealthy(ctx, cur)
-	if err != nil && s.state.Previous != nil {
+	if err != nil && s.state.Previous != nil && !s.holdRollback {
 		prev := s.state.Previous
 		s.o.Log.Printf("current release %s failed at boot (%v); rolling back to %s", cur.Version, err, prev.Version)
 		s.markBad(cur, "failed health check at boot: "+err.Error())
@@ -157,6 +179,7 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 		proc = nil
 	} else {
 		s.o.Log.Printf("release %s is healthy", cur.Version)
+		s.bootHealthy = true
 	}
 	s.run = s.supervise(cur, proc)
 	return nil

@@ -21,6 +21,7 @@ import (
 	"filippo.io/age"
 	"github.com/sigstore/sigstore/pkg/signature"
 
+	"github.com/ascension-association/ramekin/internal/identity"
 	"github.com/ascension-association/ramekin/internal/manifest"
 	"github.com/ascension-association/ramekin/internal/release"
 )
@@ -37,8 +38,10 @@ type Updater struct {
 	Identity  age.Identity
 	Interval  time.Duration
 	Device    string
-	StatusURL string   // optional: POSTed a DeviceStatus after every check
-	Metrics   *Sampler // optional: resource use included in status reports
+	StatusURL string              // optional: POSTed a DeviceStatus after every check
+	Metrics   *Sampler            // optional: resource use included in status reports
+	Firmware  *Firmware           // optional: firmware status, checked after each app check
+	Sign      func([]byte) string // optional: signs status reports (see API.Sign)
 	Log       *log.Logger
 
 	mu      sync.Mutex
@@ -59,6 +62,11 @@ func (u *Updater) Run(ctx context.Context) {
 		case <-kick:
 		}
 		err := u.Check(ctx)
+		if u.Firmware != nil {
+			if ferr := u.Firmware.Check(ctx); ferr != nil {
+				u.Log.Printf("firmware check: %v", ferr)
+			}
+		}
 		u.mu.Lock()
 		u.checked = time.Now().UTC()
 		u.lastErr = ""
@@ -193,19 +201,22 @@ func receive(r io.Reader, dir string, limit int64) (path, sum string, n int64, e
 
 // DeviceStatus is what a device reports (API /v1/status and update.status_url).
 type DeviceStatus struct {
-	Device    string     `json:"device"`
-	Arch      string     `json:"arch"`
-	Channel   string     `json:"channel"`
-	Current   *Release   `json:"current,omitempty"`
-	Previous  *Release   `json:"previous,omitempty"`
-	History   []*Release `json:"history,omitempty"` // earlier releases it can switch to, newest first
-	Trial     *Release   `json:"trial,omitempty"`   // being health-checked right now
-	App       AppStatus  `json:"app"`
-	BadCount  int        `json:"bad_count"`
-	LastCheck time.Time  `json:"last_check,omitzero"`
-	LastError string     `json:"last_error,omitempty"`
-	Metrics   *Metrics   `json:"metrics,omitempty"`
-	Reported  time.Time  `json:"reported"`
+	Device    string          `json:"device"`
+	Arch      string          `json:"arch"`
+	Channel   string          `json:"channel"`
+	Current   *Release        `json:"current,omitempty"`
+	Previous  *Release        `json:"previous,omitempty"`
+	History   []*Release      `json:"history,omitempty"` // earlier releases it can switch to, newest first
+	Trial     *Release        `json:"trial,omitempty"`   // being health-checked right now
+	App       AppStatus       `json:"app"`
+	BadCount  int             `json:"bad_count"`
+	LastCheck time.Time       `json:"last_check,omitzero"`
+	LastError string          `json:"last_error,omitempty"`
+	Metrics   *Metrics        `json:"metrics,omitempty"`
+	Firmware  *FirmwareStatus `json:"firmware,omitempty"`
+	Reported  time.Time       `json:"reported"`
+	// Nonce echoes the workstation's nonce, binding a signed answer to its request.
+	Nonce string `json:"nonce,omitempty"`
 }
 
 // NewStatus reports a supervisor's releases, app and resource use.
@@ -223,6 +234,10 @@ func (u *Updater) Status() DeviceStatus {
 	u.mu.Lock()
 	defer u.mu.Unlock()
 	s.Channel, s.LastCheck, s.LastError = u.Channel, u.checked, u.lastErr
+	if u.Firmware != nil {
+		fw := u.Firmware.Status()
+		s.Firmware = &fw
+	}
 	return s
 }
 
@@ -232,6 +247,10 @@ func (u *Updater) ReportStatus(ctx context.Context) {
 		return
 	}
 	b, _ := json.Marshal(u.Status())
+	sig := ""
+	if u.Sign != nil {
+		sig = u.Sign(b)
+	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.StatusURL, bytes.NewReader(b))
@@ -240,6 +259,9 @@ func (u *Updater) ReportStatus(ctx context.Context) {
 		return
 	}
 	req.Header.Set("Content-Type", "application/json")
+	if sig != "" {
+		req.Header.Set(identity.SignatureHeader, sig)
+	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
 		u.Log.Printf("report status: %v", err)

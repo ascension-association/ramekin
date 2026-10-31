@@ -38,8 +38,13 @@ func TestDevice(t *testing.T) {
 	if _, err := ParseDevice([]byte(`{}`)); err == nil {
 		t.Fatal("device without signing key accepted")
 	}
-	if _, err := ParseDevice([]byte(`{"signing_pubkey":"x","update":{"enabled":true,"url":"https://e"}}`)); err == nil {
+	if _, err := ParseDevice([]byte(`{"signing_pubkey":"x","api_token":"t","update":{"enabled":true,"url":"https://e"}}`)); err == nil {
 		t.Fatal("updates without age identity accepted")
+	}
+	// A fleet image has no token or age key: devices get them when claimed.
+	f, err := ParseDevice([]byte(`{"signing_pubkey":"x","update":{"enabled":true,"url":"https://e"},"firmware":{"version":"1","url":"https://e/fw"}}`))
+	if err != nil || !f.Fleet() || f.Firmware.Version != "1" {
+		t.Fatalf("fleet config: %v %+v", err, f)
 	}
 	if _, err := ParseDevice([]byte(`{"signing_pubkey":"x","age_identity":"k","update":{"enabled":true}}`)); err == nil {
 		t.Fatal("updates without a channel URL accepted")

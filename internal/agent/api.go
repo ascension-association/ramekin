@@ -1,11 +1,21 @@
 package agent
 
 import (
+	"archive/tar"
 	"crypto/subtle"
 	"encoding/json"
 	"errors"
+	"fmt"
+	"io"
 	"net/http"
+	"os"
+	"path/filepath"
 	"strings"
+
+	"github.com/sigstore/sigstore/pkg/signature"
+
+	"github.com/ascension-association/ramekin/internal/identity"
+	"github.com/ascension-association/ramekin/internal/manifest"
 )
 
 // API is the device's authenticated HTTP API, used by `ramekin push`,
@@ -17,6 +27,16 @@ type API struct {
 	Metrics *Sampler // optional
 	Token   string
 	Device  string
+
+	// Sign, once the device is claimed, signs response bodies with its
+	// identity key, so the workstation knows which device answered.
+	Sign func([]byte) string
+	// Claim serves /v1/claim (unauthenticated); nil disables claiming.
+	Claim *Claimer
+	// Firmware accepts firmware pushes (checked against Verifier); nil
+	// disables them.
+	Firmware *Firmware
+	Verifier signature.Verifier
 }
 
 type PushResult struct {
@@ -28,6 +48,7 @@ type PushResult struct {
 
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
+	mux.HandleFunc("PUT /v1/firmware", a.pushFirmware)
 	mux.HandleFunc("GET /v1/status", a.status)
 	mux.HandleFunc("PUT /v1/image", a.push)
 	mux.HandleFunc("GET /v1/logs", a.logs)
@@ -49,7 +70,15 @@ func (a *API) Handler() http.Handler {
 		a.Sup.ClearBad()
 		w.WriteHeader(http.StatusNoContent)
 	})
-	return a.auth(mux)
+	authed := a.auth(mux)
+	if a.Claim == nil {
+		return authed
+	}
+	top := http.NewServeMux()
+	top.HandleFunc("GET /v1/claim", a.Claim.info)
+	top.HandleFunc("POST /v1/claim", a.Claim.claim)
+	top.Handle("/", authed)
+	return top
 }
 
 func (a *API) auth(next http.Handler) http.Handler {
@@ -63,12 +92,88 @@ func (a *API) auth(next http.Handler) http.Handler {
 	})
 }
 
+// status answers with the device's status. The workstation passes a random
+// nonce, which the (signed) answer echoes, so an old answer can't be replayed.
 func (a *API) status(w http.ResponseWriter, r *http.Request) {
+	var s DeviceStatus
 	if a.Upd != nil {
-		writeJSON(w, http.StatusOK, a.Upd.Status())
+		s = a.Upd.Status()
+	} else {
+		s = NewStatus(a.Device, a.Sup, a.Metrics)
+		if a.Firmware != nil {
+			fw := a.Firmware.Status()
+			s.Firmware = &fw
+		}
+	}
+	s.Nonce = r.URL.Query().Get("nonce")
+	a.writeJSON(w, http.StatusOK, s)
+}
+
+// pushFirmware installs a firmware image sent as a tar of manifest.json (a
+// signed firmware manifest), boot.img and root.img, then reboots into it for
+// a test boot.
+func (a *API) pushFirmware(w http.ResponseWriter, r *http.Request) {
+	if a.Firmware == nil {
+		http.Error(w, "this device's ramekind can't install firmware", http.StatusNotImplemented)
 		return
 	}
-	writeJSON(w, http.StatusOK, NewStatus(a.Device, a.Sup, a.Metrics))
+	dir, err := os.MkdirTemp(TmpDir(a.Sup.o.DataDir), "firmware-")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	defer os.RemoveAll(dir)
+	files := map[string]string{}
+	var m *manifest.Manifest
+	tr := tar.NewReader(r.Body)
+	for {
+		h, err := tr.Next()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			http.Error(w, "read upload: "+err.Error(), http.StatusBadRequest)
+			return
+		}
+		switch h.Name {
+		case "manifest.json":
+			b, err := io.ReadAll(io.LimitReader(tr, 1<<20))
+			if err == nil {
+				m, err = manifest.Open(b, a.Verifier)
+			}
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+		case "boot.img", "root.img":
+			p := filepath.Join(dir, h.Name)
+			f, err := os.Create(p)
+			if err == nil {
+				_, err = io.Copy(f, tr)
+				if cerr := f.Close(); err == nil {
+					err = cerr
+				}
+			}
+			if err != nil {
+				http.Error(w, "receive "+h.Name+": "+err.Error(), http.StatusInternalServerError)
+				return
+			}
+			files[strings.TrimSuffix(h.Name, ".img")] = p
+		}
+	}
+	if m == nil {
+		http.Error(w, "no signed manifest", http.StatusBadRequest)
+		return
+	}
+	if err := VerifyParts(m, files); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.Firmware.Install(r.Context(), m.Version, files["boot"], files["root"]); err != nil {
+		http.Error(w, fmt.Sprintf("install firmware %s: %v", m.Version, err), http.StatusInternalServerError)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, map[string]string{"version": m.Version, "status": "rebooting for a test boot"})
 }
 
 // rollback runs an earlier release on trial: the previous one, or for
@@ -92,7 +197,7 @@ func (a *API) rollback(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		res.Error = err.Error()
 	}
-	writeJSON(w, code, res)
+	a.writeJSON(w, code, res)
 }
 
 func (a *API) push(w http.ResponseWriter, r *http.Request) {
@@ -112,7 +217,7 @@ func (a *API) push(w http.ResponseWriter, r *http.Request) {
 		res.Error = err.Error()
 		code = http.StatusUnprocessableEntity
 	}
-	writeJSON(w, code, res)
+	a.writeJSON(w, code, res)
 }
 
 func (a *API) logs(w http.ResponseWriter, r *http.Request) {
@@ -151,10 +256,18 @@ func (a *API) findKept(sha, version string) string {
 	return ""
 }
 
-func writeJSON(w http.ResponseWriter, code int, v any) {
+// writeJSON answers with v, signed with the device's key once it is claimed.
+func (a *API) writeJSON(w http.ResponseWriter, code int, v any) {
+	b, err := json.MarshalIndent(v, "", "  ")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	b = append(b, '\n')
 	w.Header().Set("Content-Type", "application/json")
+	if a.Sign != nil {
+		w.Header().Set(identity.SignatureHeader, a.Sign(b))
+	}
 	w.WriteHeader(code)
-	enc := json.NewEncoder(w)
-	enc.SetIndent("", "  ")
-	enc.Encode(v)
+	w.Write(b)
 }

@@ -14,6 +14,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 
@@ -28,9 +29,19 @@ const ramekindPkg = "github.com/ascension-association/ramekin/cmd/ramekind"
 const lockscreenPkg = "github.com/ascension-association/gk-lockscreen"
 
 // Ramekin devices run ramekind, and optionally gk-lockscreen, as gokrazy
-// Packages; nothing else is allowed. The kernel comes from KernelPackage, which must be a repository named
-// "kernel" or "kernel.<something>". gokrazy's own system services are
-// configured separately (GokrazyPackages).
+// Packages. Devices you develop with and push to locally may also run
+// gokrazy's development tools (devPackages); the fleet image may not. The
+// kernel comes from KernelPackage, which must be a repository named "kernel"
+// or "kernel.<something>". gokrazy's own system services are configured
+// separately (GokrazyPackages).
+
+// devPackages are allowed on local development devices only.
+var devPackages = []string{
+	"github.com/gokrazy/fbstatus",
+	"github.com/gokrazy/hello",
+	"github.com/gokrazy/serial-busybox",
+	"github.com/gokrazy/breakglass",
+}
 
 func isKernelPackage(pkg string) bool {
 	parts := strings.Split(pkg, "/")
@@ -41,14 +52,15 @@ func isKernelPackage(pkg string) bool {
 	return repo == "kernel" || strings.HasPrefix(repo, "kernel.")
 }
 
-func allowedPackage(pkg string) bool {
-	return pkg == ramekindPkg || pkg == lockscreenPkg
+func allowedPackage(pkg string, fleet bool) bool {
+	return pkg == ramekindPkg || pkg == lockscreenPkg || (!fleet && slices.Contains(devPackages, pkg))
 }
 
-// enforcePackages makes a gokrazy config's Packages exactly the allowed set:
-// it removes anything else (and its PackageConfig) and adds missing required
-// packages. It fails if KernelPackage isn't a kernel repository.
-func enforcePackages(cfg map[string]any) (removed, added []string, err error) {
+// enforcePackages makes a gokrazy config's Packages exactly the allowed set
+// (for the fleet image, or for a local device): it removes anything else
+// (and its PackageConfig) and adds missing required packages. It fails if
+// KernelPackage isn't a kernel repository.
+func enforcePackages(cfg map[string]any, fleet bool) (removed, added []string, err error) {
 	pkgs, _ := cfg["Packages"].([]any)
 	// gok fetches KernelPackage without building it (it only builds main
 	// packages listed in Packages); unset means its default,
@@ -64,7 +76,7 @@ func enforcePackages(cfg map[string]any) (removed, added []string, err error) {
 		s, _ := p.(string)
 		switch {
 		case have[s]:
-		case allowedPackage(s):
+		case allowedPackage(s, fleet):
 			keep = append(keep, s)
 			have[s] = true
 		default:
@@ -84,11 +96,15 @@ func enforcePackages(cfg map[string]any) (removed, added []string, err error) {
 	return removed, added, nil
 }
 
-func reportPackages(cfgPath string, removed, added []string) {
+func reportPackages(cfgPath string, removed, added []string, fleet bool) {
 	if len(removed)+len(added) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s: Ramekin devices run only ramekind and, optionally, gk-lockscreen (plus the KernelPackage)\n", cfgPath)
+	if fleet {
+		fmt.Fprintf(os.Stderr, "%s: the fleet image runs only ramekind and, optionally, gk-lockscreen (plus the KernelPackage)\n", cfgPath)
+	} else {
+		fmt.Fprintf(os.Stderr, "%s: Ramekin devices run only ramekind, optionally gk-lockscreen, and gokrazy's development tools (%s) (plus the KernelPackage)\n", cfgPath, strings.Join(devPackages, ", "))
+	}
 	for _, r := range removed {
 		fmt.Fprintf(os.Stderr, "  removed %s\n", r)
 	}
@@ -109,6 +125,14 @@ type deviceRecord struct {
 	Token string `json:"token"`
 	// MAC lets ramekin find the device again after DHCP gives it a new address.
 	MAC string `json:"mac,omitempty"`
+
+	// Set when the device is claimed (`ramekin device claim`): its signing
+	// key, which every answer from it must be signed with, and the rest of
+	// its identity.
+	PublicKey       string `json:"public_key,omitempty"`
+	HardwareID      string `json:"hardware_id,omitempty"`
+	AgeRecipient    string `json:"age_recipient,omitempty"`
+	GokrazyPassword string `json:"gokrazy_password,omitempty"`
 
 	name, path string // where the record was loaded from; empty for URLs
 }
@@ -208,11 +232,13 @@ func (d *deviceRecord) do(ctx context.Context, method, path string, body io.Read
 
 func cmdDevice(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ramekin device init|set|update|find|list ...")
+		return errors.New("usage: ramekin device init|claim|set|update|find|list ...")
 	}
 	switch args[0] {
 	case "init":
 		return deviceInit(args[1:])
+	case "claim":
+		return deviceClaim(ctx, args[1:])
 	case "set":
 		return deviceSet(ctx, args[1:])
 	case "update":
@@ -477,8 +503,12 @@ func cmdPush(ctx context.Context, args []string) error {
 		return err
 	}
 	defer resp.Body.Close()
+	b, err := d.readVerified(resp)
+	if err != nil {
+		return err
+	}
 	var res agent.PushResult
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.Unmarshal(b, &res); err != nil {
 		return fmt.Errorf("device returned %s", resp.Status)
 	}
 	if !res.OK {
@@ -526,7 +556,23 @@ func cmdLogs(ctx context.Context, args []string) error {
 }
 
 func cmdStatus(ctx context.Context, args []string) error {
-	return simpleDeviceCall(ctx, args, "status", http.MethodGet, "/v1/status")
+	if len(args) != 1 {
+		return errors.New("usage: ramekin status <device>")
+	}
+	p, err := loadProject()
+	if err != nil {
+		return err
+	}
+	d, err := resolveDevice(p, args[0])
+	if err != nil {
+		return err
+	}
+	_, b, err := d.status(ctx, time.Minute)
+	if err != nil {
+		return err
+	}
+	_, err = os.Stdout.Write(b)
+	return err
 }
 
 func cmdRestart(ctx context.Context, args []string) error {
@@ -608,7 +654,7 @@ func mergeGokrazy(cfgPath string, devJSON []byte, arch string) error {
 			}
 		}
 	}
-	removed, added, err := enforcePackages(cfg)
+	removed, added, err := enforcePackages(cfg, false)
 	if err != nil {
 		return fmt.Errorf("%s: %w", cfgPath, err)
 	}
@@ -647,7 +693,7 @@ func mergeGokrazy(cfgPath string, devJSON []byte, arch string) error {
 	if err := os.WriteFile(cfgPath, append(out, '\n'), 0o600); err != nil {
 		return err
 	}
-	reportPackages(cfgPath, removed, added)
+	reportPackages(cfgPath, removed, added, false)
 	return nil
 }
 
@@ -677,7 +723,7 @@ func deviceUpdate(ctx context.Context, args []string) error {
 	if err := json.Unmarshal(orig, &cfg); err != nil {
 		return fmt.Errorf("%s: %w", cfgPath, err)
 	}
-	removed, added, err := enforcePackages(cfg)
+	removed, added, err := enforcePackages(cfg, false)
 	if err != nil {
 		return fmt.Errorf("%s: %w", cfgPath, err)
 	}
@@ -694,7 +740,7 @@ func deviceUpdate(ctx context.Context, args []string) error {
 		if err := os.WriteFile(cfgPath, fixed, 0o600); err != nil {
 			return err
 		}
-		reportPackages(cfgPath, removed, added)
+		reportPackages(cfgPath, removed, added, false)
 		orig = fixed
 	}
 	upd, _ := cfg["Update"].(map[string]any)

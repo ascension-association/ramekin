@@ -32,6 +32,19 @@ type Manifest struct {
 	SBOM      string         `json:"sbom,omitempty"`
 	Published time.Time      `json:"published"`
 	Vulns     map[string]int `json:"vulnerabilities,omitempty"`
+
+	// Kind is "firmware" for a gokrazy OS image (boot and root partitions,
+	// in Parts); empty for an app release.
+	Kind  string `json:"kind,omitempty"`
+	Parts []Part `json:"parts,omitempty"`
+}
+
+// Part is one encrypted file of a firmware release.
+type Part struct {
+	Name   string `json:"name"`   // "boot" or "root"
+	Object string `json:"object"` // relative to the channel file
+	SHA256 string `json:"sha256"` // of the decrypted file
+	Size   int64  `json:"size"`
 }
 
 type Envelope struct {
@@ -40,7 +53,21 @@ type Envelope struct {
 }
 
 func Sign(m *Manifest, s signature.Signer) ([]byte, error) {
-	payload, err := json.Marshal(m)
+	return Seal(m, s)
+}
+
+// Open verifies an envelope and returns its manifest.
+func Open(b []byte, v signature.Verifier) (*Manifest, error) {
+	var m Manifest
+	if err := OpenInto(b, v, &m); err != nil {
+		return nil, fmt.Errorf("manifest %w", err)
+	}
+	return &m, nil
+}
+
+// Seal signs any JSON-encodable value into an Envelope.
+func Seal(v any, s signature.Signer) ([]byte, error) {
+	payload, err := json.Marshal(v)
 	if err != nil {
 		return nil, err
 	}
@@ -51,23 +78,22 @@ func Sign(m *Manifest, s signature.Signer) ([]byte, error) {
 	return json.MarshalIndent(Envelope{Payload: payload, Signature: sig}, "", "  ")
 }
 
-// Open verifies an envelope and returns its manifest.
-func Open(b []byte, v signature.Verifier) (*Manifest, error) {
+// OpenInto verifies an Envelope and decodes its payload into out.
+func OpenInto(b []byte, v signature.Verifier, out any) error {
 	var env Envelope
 	if err := json.Unmarshal(b, &env); err != nil {
-		return nil, fmt.Errorf("manifest envelope: %w", err)
+		return fmt.Errorf("envelope: %w", err)
 	}
 	if len(env.Signature) == 0 {
-		return nil, errors.New("manifest is unsigned")
+		return errors.New("is unsigned")
 	}
 	if err := v.VerifySignature(bytes.NewReader(env.Signature), bytes.NewReader(env.Payload)); err != nil {
-		return nil, fmt.Errorf("manifest signature: %w", err)
+		return fmt.Errorf("signature: %w", err)
 	}
-	var m Manifest
-	if err := json.Unmarshal(env.Payload, &m); err != nil {
-		return nil, fmt.Errorf("manifest payload: %w", err)
+	if err := json.Unmarshal(env.Payload, out); err != nil {
+		return fmt.Errorf("payload: %w", err)
 	}
-	return &m, nil
+	return nil
 }
 
 // Unverified decodes an envelope without checking the signature. Only for

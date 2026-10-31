@@ -41,7 +41,10 @@ type fleetDevice struct {
 	Polled time.Time           `json:"polled"`
 	// Seen is when the device last answered, so an offline row can say how long ago.
 	Seen time.Time `json:"seen,omitzero"`
-	Busy string    `json:"busy,omitempty"` // an action in progress, e.g. "switching to 1.2.0"
+	Busy string    `json:"busy,omitempty"`
+	// Verified is set when the device's answer was signed with the key it
+	// was claimed with.
+	Verified bool `json:"verified"` // an action in progress, e.g. "switching to 1.2.0"
 }
 
 type console struct {
@@ -225,11 +228,15 @@ func (c *console) poll(ctx context.Context, name string) {
 			row.Status = &st
 			row.Seen = row.Polled
 			row.Health, row.Detail = classify(&st)
+			row.Verified = d.PublicKey != ""
 			row.URL = d.URL // locate may have found it at a new address
 		}
 	}
 	if err != nil {
 		row.Health, row.Detail = "offline", err.Error()
+		if strings.Contains(err.Error(), "identity check failed") {
+			row.Health = "unhealthy" // it answers, but not as the device we claimed
+		}
 	}
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -262,15 +269,12 @@ func (c *console) fetchStatus(ctx context.Context, d *deviceRecord, st *agent.De
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	resp, err := d.do(ctx, http.MethodGet, "/v1/status", nil, 10*time.Second)
+	s, _, err := d.status(ctx, 10*time.Second)
 	if err != nil {
 		return err
 	}
-	defer resp.Body.Close()
-	if resp.StatusCode != http.StatusOK {
-		return fmt.Errorf("status: %s", resp.Status)
-	}
-	return json.NewDecoder(resp.Body).Decode(st)
+	*st = *s
+	return nil
 }
 
 // classify sums up a device's status as one health word and a reason.
@@ -353,8 +357,12 @@ func switchDevice(ctx context.Context, p *config.Project, name string, q url.Val
 		return nil, err
 	}
 	defer resp.Body.Close()
+	b, err := d.readVerified(resp)
+	if err != nil {
+		return nil, err
+	}
 	var res agent.PushResult
-	if err := json.NewDecoder(resp.Body).Decode(&res); err != nil {
+	if err := json.Unmarshal(b, &res); err != nil {
 		return nil, fmt.Errorf("device returned %s (is its ramekind older than this ramekin? run `ramekin device update %s`)", resp.Status, name)
 	}
 	if res.OK {

@@ -32,7 +32,7 @@ func init() {
 		{"scan", "[sif]", "scan a SIF for CVEs and apply the project's policy", cmdScan},
 		{"sign", "[sif]", "sign a SIF with the project key", cmdSign},
 		{"verify", "[sif]", "verify a SIF's signature with the project public key", cmdVerify},
-		{"device", "init|set|update|find|list", "create, configure, update and locate gokrazy devices", cmdDevice},
+		{"device", "init|claim|set|update|find|list", "create, claim, configure, update and locate gokrazy devices", cmdDevice},
 		{"push", "<device> [sif]", "sign and push a SIF to a device for testing", cmdPush},
 		{"logs", "<device> [-f]", "show a device's container and agent logs", cmdLogs},
 		{"status", "<device>", "show what a device is running", cmdStatus},
@@ -41,6 +41,7 @@ func init() {
 		{"publish", "--version V [--channel C]", "scan, sign, encrypt and upload a release, then update a channel", cmdPublish},
 		{"promote", "<version> --channel C", "point a channel at an already-published version (also used to roll back)", cmdPromote},
 		{"releases", "", "list published releases and channels", cmdReleases},
+		{"firmware", "init|publish|push", "build the fleet OS image and publish or push it (kernel, gokrazy, ramekind)", cmdFirmware},
 		{"watch", "[--interval D]", "rescan published releases against fresh CVE data and alert", cmdWatch},
 	}
 }

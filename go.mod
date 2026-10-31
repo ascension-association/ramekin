@@ -4,6 +4,7 @@ go 1.27
 
 require (
 	filippo.io/age v1.3.2
+	github.com/gokrazy/updater v0.0.0-20260620140544-0a84d8ab3878
 	github.com/google/go-containerregistry v0.22.1
 	github.com/sigstore/sigstore v1.11.2
 	github.com/sylabs/sif/v2 v2.24.2

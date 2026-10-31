@@ -368,3 +368,24 @@ func TestBootTrimsHistory(t *testing.T) {
 		t.Fatalf("want %d images, got %d", KeepReleases+1, len(ents))
 	}
 }
+
+func TestBootHoldsRollbackOnFirmwareTestBoot(t *testing.T) {
+	dir := t.TempDir()
+	rt := &fakeRuntime{}
+	os.MkdirAll(filepath.Join(dir, "images"), 0o700)
+	v1 := filepath.Join(dir, "images", "s1.sif")
+	v2 := filepath.Join(dir, "images", "s2.sif")
+	os.WriteFile(v1, []byte("v1"), 0o600)
+	os.WriteFile(v2, []byte("crash"), 0o600)
+	saveState(filepath.Join(dir, "state.json"), State{
+		Current:  &Release{Version: "v2", SHA256: "s2", Path: v2},
+		Previous: &Release{Version: "v1", SHA256: "s1", Path: v1},
+	})
+	s := newSup(t, dir, rt)
+	s.HoldRollback()
+	s.Boot(context.Background())
+	st := s.State()
+	if st.Current.Version != "v2" || len(st.Bad) != 0 || s.BootHealthy() {
+		t.Fatalf("app rolled back or reported healthy: %+v healthy=%v", st, s.BootHealthy())
+	}
+}

@@ -79,6 +79,9 @@ type Releases struct {
 	GitHub string `yaml:"github"`
 	// Branch holds the channel manifests, one file per channel.
 	Branch string `yaml:"branch"`
+	// Firmware is the repository for firmware releases (`ramekin firmware
+	// publish`), as owner/name; default: the same as GitHub.
+	Firmware string `yaml:"firmware"`
 	// TokenEnv names the environment variable with a GitHub token that can
 	// write the repository's contents and releases (default GITHUB_TOKEN;
 	// falls back to GH_TOKEN, then `gh auth token`).
@@ -88,6 +91,19 @@ type Releases struct {
 // ChannelURL is the directory devices fetch <channel>.json from.
 func (p *Project) ChannelURL() string {
 	return "https://raw.githubusercontent.com/" + p.Releases.GitHub + "/" + p.Releases.Branch + "/" + p.Name
+}
+
+// FirmwareRepo is the repository firmware is published to.
+func (p *Project) FirmwareRepo() string {
+	if p.Releases.Firmware != "" {
+		return p.Releases.Firmware
+	}
+	return p.Releases.GitHub
+}
+
+// FirmwareChannelURL is the directory devices fetch firmware <channel>.json from.
+func (p *Project) FirmwareChannelURL() string {
+	return "https://raw.githubusercontent.com/" + p.FirmwareRepo() + "/" + p.Releases.Branch + "/" + p.Name + "-firmware"
 }
 
 func (p *Project) applyDefaults() {

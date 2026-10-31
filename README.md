@@ -572,7 +572,58 @@ It also survives power loss and boot failures:
 
 Fleet rollback is `ramekin promote <older-version>`. It re-points the channel with a new, higher serial. To roll back a single device, use `ramekin rollback <device> [version]` or the fleet dashboard. The device keeps its three most recent successful releases (the current one and two earlier ones), and health-checks the one you pick before switching to it.
 
-gokrazy's own A/B root partitions cover OS and agent updates (`ramekin device update <device>`, which wraps `gok update`).
+gokrazy's own A/B root partitions cover OS and agent updates. For one device on your network, `ramekin device update <device>` wraps `gok update`. For a fleet, publish firmware over the air (see the next section).
+
+</details>
+
+<details>
+<summary><strong>Fleet image, claiming and firmware updates</strong></summary>
+
+`device init` builds an OS image for one board, with that device's name, API token and keys inside it. For a fleet, build one **fleet image** instead. Each device keeps its own identity on its data partition (`/perm`), so the same image, and the same firmware updates, serve every device of a kind.
+
+```sh
+ramekin firmware init --from hello            # or --target rpi|amd64; creates ~/gokrazy/<app>-fleet
+gok --parent_dir ~/gokrazy -i hello-web-fleet overwrite --full /dev/sdX
+ramekin device claim kitchen-01 192.168.1.40  # asks for the pairing code shown on the device
+```
+
+**Claiming.**
+- **First boot:** a device from the fleet image starts **unclaimed**. It creates its own signing key and age key on `/perm`, runs no app and accepts no updates. It shows a 6-digit pairing code on its console and in its gokrazy log.
+- **`device claim`:** with the right code, the workstation signs an identity record with the project key. The record binds the device's name to its public keys and to the board's hardware serial (from the device tree on the Pi and Rockchip boards, or DMI on PCs). The device stores the record, an API token and its own gokrazy password, then restarts as that device.
+- **Encryption:** the device's age key is added to `keys/recipients.txt`, so later releases are encrypted to it.
+- **Boards built with `device init`:** claim them with their existing token, and no code is needed. They keep their token and gokrazy password.
+
+**Identity checks.**
+- **On the device:** ramekind checks its identity record at every start against the project key, its own keys and the hardware serial. An edited record, or one copied from another device or onto another board, is refused, and the device is treated as unclaimed.
+- **On the workstation:** a claimed device signs every answer with its key. `status`, `push`, `rollback`, firmware pushes and the dashboard accept only answers signed with the key recorded at claim time, and status requests carry a fresh nonce so an old answer can't be replayed. Status reports to `--status-url` are signed too, in the `Ramekin-Signature` header.
+- **What it doesn't stop:** someone with the device in hand can still copy its keys from the card, or replace the image. Stopping that needs secure boot and hardware key storage (TPM or secure element), which Ramekin doesn't use yet.
+
+**Firmware updates.** Firmware is the fleet image itself: the kernel, gokrazy and ramekind.
+
+```sh
+ramekin firmware push kitchen-01 --version 0.9.0    # try it on one claimed device over the network
+ramekin firmware publish --version 1.0.0           # release it; every claimed device installs it
+```
+
+`publish` encrypts the boot and root partition images to every recipient, signs a firmware manifest, and creates the GitHub release `<app>-firmware-<version>`. Set `releases.firmware: owner/repo` in `ramekin.yaml` to publish firmware to a repository of its own. Devices check the firmware channel along with the app channel, and they install new firmware with a **test boot**:
+
+1. ramekind writes the new root to the spare root partition and the new boot partition in place, then asks gokrazy to boot the new root **once**.
+2. It reads the boot partition back first. If gokrazy didn't mark the test boot correctly, it puts the boot partition back and cancels the install instead of rebooting.
+3. On the test boot, the new image must start its app, pass the app's health check and reach its firmware channel. Then ramekind makes the image permanent and restarts once more, so gokrazy treats the new root as the active one.
+4. If the check fails, ramekind reboots into the previous image. A test boot that hangs also returns to the previous image, at the next reboot or when the hardware watchdog fires. The failed version is recorded and never installed again from the channel.
+
+During a test boot, a failing app isn't rolled back: the firmware is what's on trial. `ramekin status` shows the firmware version, any pending install and failed versions, and so does the dashboard's Details.
+
+**The kernel has no second copy.** It lives on the single boot partition with the device tree and bootloader files. A fallback runs the old root with the new kernel, and a kernel that doesn't boot needs the card rewritten by hand. Try new kernels with `firmware push` on a test device before you publish them.
+
+**Test boots need a fixed gokrazy.** gokrazy releases up to now put the test-boot flag in the wrong place ([gokrazy#395](https://github.com/gokrazy/gokrazy/issues/395)). On boards that boot through systemd-boot (PCs, many EFI arm64 boards), that leaves the device unbootable. On a Raspberry Pi the test boot quietly does nothing. Until the fix ([gokrazy#396](https://github.com/gokrazy/gokrazy/pull/396)) is released, build images with it by adding a `replace` to the gokrazy module in the instance's build directory, then install it once with a normal `ramekin device update`:
+
+```sh
+cd ~/gokrazy/<instance>/builddir/github.com/gokrazy/gokrazy
+go mod edit -replace github.com/gokrazy/gokrazy=github.com/ben-auo/gokrazy@fix-testboot-cmdline
+```
+
+Ramekin's read-back check (step 2) protects devices that don't have the fix yet. It also keeps the hardware watchdog alive on a test boot, when gokrazy's init can't.
 
 </details>
 
@@ -653,7 +704,7 @@ This needs a board whose MAC address survives reboots. Some boards generate a ra
 
 If `~/gokrazy/<device>` already exists, `ramekin device init <device>` adds ramekind to it instead of creating a new instance. Your other settings are kept, and a backup is saved as `config.json.bak`.
 
-**Ramekin devices run one gokrazy package, plus one optional one:** `github.com/ascension-association/ramekin/cmd/ramekind`, and optionally `github.com/ascension-association/gk-lockscreen` (`device init --lockscreen` adds it to a new instance). The kernel comes from `KernelPackage`, which must be a repository named `kernel` or `kernel.<name>` (gok's default, `github.com/gokrazy/kernel.rpi`, if unset). `device init` and every `device update` enforce this. They remove any other package from `Packages`, such as `breakglass`, `serial-busybox` or a kernel listed there, together with its `PackageConfig`, add ramekind if it's missing, keep gk-lockscreen if it's there, and print what changed. Kernel repositories are removed from `Packages` too: gok takes the kernel only from `KernelPackage`. gokrazy's own system services (DHCP, NTP and so on) are configured separately and aren't affected.
+**Ramekin devices run one gokrazy package, plus one optional one:** `github.com/ascension-association/ramekin/cmd/ramekind`, and optionally `github.com/ascension-association/gk-lockscreen` (`device init --lockscreen` adds it to a new instance). Devices you develop with and push to locally may also run gokrazy's development tools: `github.com/gokrazy/breakglass`, `fbstatus`, `hello` and `serial-busybox`. The fleet image may not. The kernel comes from `KernelPackage`, which must be a repository named `kernel` or `kernel.<name>` (gok's default, `github.com/gokrazy/kernel.rpi`, if unset). `device init` and every `device update` enforce this, and so do `firmware init` and every firmware build. They remove any other package from `Packages`, such as a kernel listed there or, in the fleet image, a development tool, together with its `PackageConfig`. They add ramekind if it's missing, keep gk-lockscreen if it's there, and print what changed. Kernel repositories are removed from `Packages` too: gok takes the kernel only from `KernelPackage`. gokrazy's own system services (DHCP, NTP and so on) are configured separately and aren't affected.
 
 ```sh
 gok -i hello add github.com/ascension-association/ramekin/cmd/ramekind   # or a local checkout's cmd/ramekind
@@ -753,9 +804,11 @@ The last row covers settings that live on the device instead:
 | Tampered or replayed downloads | The channel manifest is signed. Devices ignore serials ≤ the highest they have acted on for that channel, and check each image's SHA-256 and signature. |
 | Confidentiality of releases | SIFs are encrypted with [age](https://age-encryption.org) to the fleet key and/or per-device keys (`device init --own-key`), so a public release repository exposes only names and sizes. |
 | Immutable history | `publish` never reuses a version. With GitHub's immutable releases turned on, a published release's files and tag can't be changed or deleted; `publish` says when they're off. The channel branch's git history records every publish and promote. |
-| Push API | Bearer token per device, generated by `device init`. |
+| Push API | Bearer token per device, generated by `device init` or at claim time. |
+| Device identity | A claimed device keeps its keys on `/perm` and a record of its identity signed with the project key, bound to the board's hardware serial. It refuses an edited or copied record. Its answers and status reports are signed with its key, and the workstation checks them. |
+| OS updates | Firmware is signed and encrypted like apps. It installs with a test boot, and is kept only if the device comes up healthy. |
 | Fleet dashboard | Listens only on loopback, with no login. It checks the `Host` header (against DNS rebinding) and requires a per-run key (against cross-site requests). Device tokens never reach the browser. |
-| Minimal devices | Each device runs gokrazy's system services, ramekind and (optionally) gk-lockscreen, and nothing else: no shell, no SSH, no other packages. `device init` and `device update` enforce this. |
+| Minimal devices | Each device runs gokrazy's system services, ramekind and (optionally) gk-lockscreen, and nothing else: no shell, no SSH, no other packages. Only local development devices may also run gokrazy's development tools, such as breakglass. `device init`, `device update`, `firmware init` and firmware builds enforce this. |
 | No storage credentials on devices | Devices only download, anonymously, over HTTPS. Only the workstation (or CI) holds a GitHub token. |
 
 Key files: `keys/ramekin-sign.key` and `keys/*.agekey` are secret (gitignored). `keys/ramekin-sign.pub` and `keys/recipients.txt` are safe to commit. In CI, pass the signing key PEM in `RAMEKIN_SIGNING_KEY`.
@@ -772,6 +825,7 @@ Key files: `keys/ramekin-sign.key` and `keys/*.agekey` are secret (gitignored). 
 - **Encryption is at rest in the release repository and in transit, not on the device.** The decrypted SIF on `/perm` is plaintext. Apptainer's native LUKS-encrypted SIFs are not supported by the native runtime.
 - **Workloads should handle SIGTERM.** The container's entrypoint is PID 1, and PID 1 ignores SIGTERM unless it installs a handler. Without one, stops wait `stop_timeout` (10s) before SIGKILL.
 - **Cross-architecture builds** (amd64 workstation, arm64 devices) need qemu binfmt for the final stage's `%post` and for `ramekin shell`. Build stages run natively.
+- **The kernel can't be rolled back.** Firmware updates fall back to the previous root partition, but the boot partition (kernel, device tree) has one copy. See "Fleet image, claiming and firmware updates".
 - **A dev push stays in place until the next publish.** Pushed images do not advance the channel serial, so a device that also follows a channel switches back when a newer release is published.
 
 </details>

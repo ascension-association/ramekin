@@ -13,15 +13,21 @@ import (
 const DefaultDevicePath = "/etc/ramekin/device.json"
 
 // Device is the configuration of ramekind, the on-device agent.
+//
+// A fleet image's configuration leaves out Name, APIToken and AgeIdentity:
+// each device then gets them when it is claimed, and keeps them on /perm
+// (see package identity). A device built for one board (`ramekin device
+// init`) has them here.
 type Device struct {
-	Name          string `json:"name"`
+	Name          string `json:"name,omitempty"`
 	DataDir       string `json:"data_dir,omitempty"`
 	Listen        string `json:"listen,omitempty"`
-	APIToken      string `json:"api_token"`
+	APIToken      string `json:"api_token,omitempty"`
 	SigningPubKey string `json:"signing_pubkey"`         // PEM
 	AgeIdentity   string `json:"age_identity,omitempty"` // AGE-SECRET-KEY-1...
 
 	Update    Update    `json:"update,omitempty"`
+	Firmware  Firmware  `json:"firmware,omitempty"`
 	Container Container `json:"container,omitempty"`
 	Health    Health    `json:"health,omitempty"`
 }
@@ -39,6 +45,19 @@ type Update struct {
 	// StatusURL, if set, receives a JSON status report (POST) after each check.
 	StatusURL string `json:"status_url,omitempty"`
 }
+
+// Firmware configures over-the-air updates of the OS image itself (kernel,
+// gokrazy and ramekind), published with `ramekin firmware publish`.
+type Firmware struct {
+	// Version is the firmware version this image was built as.
+	Version string `json:"version,omitempty"`
+	// URL is the directory of firmware channel manifests; empty disables
+	// firmware updates. It follows Update.Channel and Update.Interval.
+	URL string `json:"url,omitempty"`
+}
+
+// Fleet reports whether this is a fleet image, whose devices are claimed.
+func (d *Device) Fleet() bool { return d.APIToken == "" }
 
 type Container struct {
 	Hostname string            `json:"hostname,omitempty"`
@@ -108,7 +127,7 @@ func (d *Device) validate() error {
 		if !strings.HasPrefix(d.Update.URL, "https://") && !strings.HasPrefix(d.Update.URL, "http://") {
 			return errors.New("update.url (an http(s) URL) is required when updates are enabled")
 		}
-		if d.AgeIdentity == "" {
+		if d.AgeIdentity == "" && !d.Fleet() {
 			return errors.New("age_identity is required when updates are enabled")
 		}
 	}

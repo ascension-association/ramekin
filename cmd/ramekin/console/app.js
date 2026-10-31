@@ -172,7 +172,15 @@ function card(d) {
     if (st.app && st.app.restarts) facts.push(["App restarts", String(st.app.restarts)]);
     if (st.app && st.app.last_exit) facts.push(["Last exit", st.app.last_exit]);
     if (st.bad_count) facts.push(["Rejected releases", String(st.bad_count)]);
+    if (st.firmware) {
+      let fw = st.firmware.version || "unversioned";
+      if (st.firmware.pending) fw += ` (installing ${st.firmware.pending})`;
+      facts.push(["Firmware", fw]);
+      const failed = Object.keys(st.firmware.failed || {});
+      if (failed.length) facts.push(["Firmware that failed", failed.join(", ")]);
+    }
   }
+  facts.push(["Identity", d.verified ? "verified (signed by its claimed key)" : "not claimed"]);
   facts.push(["API", d.url || "—"]);
   facts.push([offline ? "Last answered" : "Polled", offline ? ago(d.seen) : ago(d.polled)]);
 
