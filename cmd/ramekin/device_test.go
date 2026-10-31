@@ -42,8 +42,8 @@ func TestMergeMovesDashboard(t *testing.T) {
 	if upd["HTTPPort"] != dashboardPort || upd["HTTPPassword"] != "pw" {
 		t.Fatalf("Update = %v", upd)
 	}
-	// breakglass is removed; ramekind and gk-lockscreen are added.
-	if pkgs := cfg["Packages"].([]any); len(pkgs) != 2 || pkgs[0] != ramekindPkg || pkgs[1] != lockscreenPkg {
+	// breakglass is removed; ramekind is added; gk-lockscreen is optional.
+	if pkgs := cfg["Packages"].([]any); len(pkgs) != 1 || pkgs[0] != ramekindPkg {
 		t.Fatalf("Packages = %v", pkgs)
 	}
 	// A deliberately chosen port is respected.
@@ -279,5 +279,17 @@ func TestEnforcePackages(t *testing.T) {
 		if _, _, err := enforcePackages(bad); err == nil {
 			t.Errorf("KernelPackage %v accepted", k)
 		}
+	}
+}
+
+func TestLockscreenOptional(t *testing.T) {
+	cfg := map[string]any{"KernelPackage": "github.com/gokrazy/kernel.rpi", "Packages": []any{ramekindPkg}}
+	removed, added, err := enforcePackages(cfg)
+	if err != nil || len(removed)+len(added) != 0 {
+		t.Fatalf("ramekind alone: removed=%v added=%v err=%v", removed, added, err)
+	}
+	cfg["Packages"] = []any{lockscreenPkg}
+	if _, added, _ := enforcePackages(cfg); strings.Join(added, " ") != ramekindPkg {
+		t.Fatalf("added = %v; want only ramekind", added)
 	}
 }

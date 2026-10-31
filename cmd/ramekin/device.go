@@ -27,8 +27,8 @@ const ramekindPkg = "github.com/ascension-association/ramekin/cmd/ramekind"
 
 const lockscreenPkg = "github.com/ascension-association/gk-lockscreen"
 
-// Ramekin devices run exactly ramekind and gk-lockscreen as gokrazy Packages.
-// The kernel comes from KernelPackage, which must be a repository named
+// Ramekin devices run ramekind, and optionally gk-lockscreen, as gokrazy
+// Packages; nothing else is allowed. The kernel comes from KernelPackage, which must be a repository named
 // "kernel" or "kernel.<something>". gokrazy's own system services are
 // configured separately (GokrazyPackages).
 
@@ -71,11 +71,9 @@ func enforcePackages(cfg map[string]any) (removed, added []string, err error) {
 			removed = append(removed, fmt.Sprint(p))
 		}
 	}
-	for _, req := range []string{ramekindPkg, lockscreenPkg} {
-		if !have[req] {
-			keep = append(keep, req)
-			added = append(added, req)
-		}
+	if !have[ramekindPkg] {
+		keep = append(keep, ramekindPkg)
+		added = append(added, ramekindPkg)
 	}
 	cfg["Packages"] = keep
 	if pc, ok := cfg["PackageConfig"].(map[string]any); ok {
@@ -90,7 +88,7 @@ func reportPackages(cfgPath string, removed, added []string) {
 	if len(removed)+len(added) == 0 {
 		return
 	}
-	fmt.Fprintf(os.Stderr, "%s: Ramekin devices run exactly ramekind and gk-lockscreen (plus the KernelPackage)\n", cfgPath)
+	fmt.Fprintf(os.Stderr, "%s: Ramekin devices run only ramekind and, optionally, gk-lockscreen (plus the KernelPackage)\n", cfgPath)
 	for _, r := range removed {
 		fmt.Fprintf(os.Stderr, "  removed %s\n", r)
 	}
@@ -247,6 +245,7 @@ func deviceInit(args []string) error {
 	healthHTTP := fl.String("health-http", "", "URL that must return 2xx for a new release to be accepted")
 	healthTCP := fl.String("health-tcp", "", "host:port that must accept connections for a new release to be accepted")
 	healthExec := fl.String("health-exec", "", "command run inside the container that must exit 0 for a new release to be accepted")
+	lockscreen := fl.Bool("lockscreen", false, "also run gk-lockscreen ("+lockscreenPkg+") on a new instance")
 	statusURL := fl.String("status-url", "", "URL the device POSTs a JSON status report to after each update check (optional)")
 	parent := fl.String("gokrazy-dir", "", "gokrazy parent directory (default ~/gokrazy)")
 	url := fl.String("url", "", "how this workstation reaches the device API (default http://<name>:8095)")
@@ -330,11 +329,15 @@ func deviceInit(args []string) error {
 		return fmt.Errorf("generated device config is invalid: %w", err)
 	}
 
+	packages := []string{ramekindPkg}
+	if *lockscreen {
+		packages = append(packages, lockscreenPkg)
+	}
 	gok := map[string]any{
 		"Hostname":    name,
 		"Update":      map[string]any{"HTTPPassword": randomHex(16), "HTTPPort": dashboardPort},
 		"Environment": []string{"GOOS=linux", "GOARCH=" + arch},
-		"Packages":    []string{ramekindPkg, lockscreenPkg},
+		"Packages":    packages,
 		"PackageConfig": map[string]any{
 			ramekindPkg: map[string]any{
 				"ExtraFileContents": map[string]string{config.DefaultDevicePath: string(devJSON)},
