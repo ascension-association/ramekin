@@ -372,6 +372,8 @@ func cmdPush(ctx context.Context, args []string) error {
 		}
 	}
 
+	warnNoShell(ctx, src)
+
 	// Sign a copy so repeated pushes don't stack signatures on the build output.
 	signed := strings.TrimSuffix(src, ".sif") + ".signed.sif"
 	if err := copyFile(src, signed); err != nil {

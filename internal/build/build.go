@@ -1,11 +1,10 @@
-// Package build produces a SIF from either a Containerfile (built with podman
-// or docker, then converted by apptainer) or a persistent overlay layered on
-// a base image (flattened into the final SIF).
+// Package build produces a SIF with apptainer from either an Apptainer
+// definition file or a persistent overlay layered on a base image (flattened
+// into the final SIF). No other container tooling is needed.
 package build
 
 import (
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"os"
@@ -14,7 +13,10 @@ import (
 	"runtime"
 	"strings"
 
+	v1 "github.com/google/go-containerregistry/pkg/v1"
+
 	"github.com/ascension-association/ramekin/internal/config"
+	"github.com/ascension-association/ramekin/internal/sifimg"
 )
 
 type Builder struct {
@@ -34,8 +36,8 @@ func (b *Builder) Build(ctx context.Context) (string, error) {
 	}
 	var err error
 	switch b.P.Source.Mode {
-	case config.ModeContainerfile:
-		err = b.fromContainerfile(ctx, out)
+	case config.ModeDef:
+		err = b.fromDef(ctx, out)
 	case config.ModeOverlay:
 		err = b.fromOverlay(ctx, out)
 	}
@@ -45,48 +47,35 @@ func (b *Builder) Build(ctx context.Context) (string, error) {
 	return out, nil
 }
 
-func (b *Builder) fromContainerfile(ctx context.Context, out string) error {
-	engine, err := b.engine()
+func (b *Builder) fromDef(ctx context.Context, out string) error {
+	src := b.P.Path(b.P.Source.Def)
+	raw, err := os.ReadFile(src)
 	if err != nil {
 		return err
 	}
-	tag := "localhost/ramekin-build/" + b.P.Name + ":latest"
-	if err := b.run(ctx, engine, "build",
-		"--platform", b.P.Platform,
-		"-f", b.P.Path(b.P.Source.Containerfile),
-		"-t", tag,
-		b.P.Path(b.P.Source.Context)); err != nil {
-		return err
-	}
-	tmp, err := os.MkdirTemp(filepath.Dir(out), ".oci-")
+	_, platform, _ := strings.Cut(b.P.Platform, "/")
+	arch, variant, _ := strings.Cut(platform, "/")
+	def, err := PrepareDef(ctx, string(raw), v1.Platform{OS: "linux", Architecture: arch, Variant: variant}, ResolveRemote)
 	if err != nil {
+		return fmt.Errorf("%s: %w", b.P.Source.Def, err)
+	}
+	gen := filepath.Join(filepath.Dir(out), ".ramekin.def")
+	if err := os.WriteFile(gen, []byte(def), 0o644); err != nil {
 		return err
 	}
-	defer os.RemoveAll(tmp)
-	archive := filepath.Join(tmp, "image.tar")
-	src := "docker-archive://" + archive
-	saveArgs := []string{"save", "--platform", b.P.Platform, "-o", archive, tag}
-	if engine == "podman" {
-		saveArgs = []string{"save", "--format", "oci-archive", "-o", archive, tag}
-		src = "oci-archive://" + archive
-	}
-	if err := b.run(ctx, engine, saveArgs...); err != nil {
+	cache := b.P.Path(filepath.Join("build", "cache"))
+	if err := os.MkdirAll(cache, 0o755); err != nil {
 		return err
 	}
-	// apptainer selects the image for --arch (default: the host) from the archive.
-	return b.run(ctx, "apptainer", "build", "--force", "--arch", b.P.Arch(), out, src)
-}
-
-func (b *Builder) engine() (string, error) {
-	if e := b.P.Source.Engine; e != "" {
-		return e, need(e)
-	}
-	for _, e := range []string{"podman", "docker"} {
-		if _, err := exec.LookPath(e); err == nil {
-			return e, nil
-		}
-	}
-	return "", errors.New("containerfile mode needs podman or docker on PATH")
+	// Run from the definition's directory so relative %files paths resolve
+	// the same way as with a plain `apptainer build`.
+	return b.runIn(ctx, filepath.Dir(src), "apptainer", "build", "--force",
+		"--warn-unused-build-args",
+		"--build-arg", "TARGETOS=linux",
+		"--build-arg", "TARGETARCH="+arch,
+		"--build-arg", "BUILDARCH="+runtime.GOARCH,
+		"--bind", cache+":"+CacheDir,
+		out, gen)
 }
 
 // OverlayInit pulls the base image and creates the persistent overlay.
@@ -239,8 +228,13 @@ func (b *Builder) Sandbox(ctx context.Context, sif, dir string) error {
 }
 
 func (b *Builder) run(ctx context.Context, name string, args ...string) error {
+	return b.runIn(ctx, "", name, args...)
+}
+
+func (b *Builder) runIn(ctx context.Context, dir, name string, args ...string) error {
 	fmt.Fprintf(b.Stderr, "+ %s %s\n", name, strings.Join(args, " "))
 	cmd := exec.CommandContext(ctx, name, args...)
+	cmd.Dir = dir
 	cmd.Stdout, cmd.Stderr = b.Stdout, b.Stderr
 	if err := cmd.Run(); err != nil {
 		return fmt.Errorf("%s %s: %w", name, args[0], err)
@@ -275,4 +269,24 @@ func writeLines(path string, lines []string) error {
 		s += "\n"
 	}
 	return os.WriteFile(path, []byte(s), 0o644)
+}
+
+// HasShell reports whether the SIF's root filesystem contains /bin/sh, which
+// ramekind uses to load the image's environment and start its runscript.
+// known is false when the check couldn't run (e.g. unsquashfs is missing).
+func HasShell(ctx context.Context, sif string) (has, known bool) {
+	rfs, err := sifimg.PrimaryRootFS(sif)
+	if err != nil {
+		return false, false
+	}
+	out, err := exec.CommandContext(ctx, "unsquashfs", "-o", fmt.Sprint(rfs.Offset), "-l", "-d", "", sif).Output()
+	if err != nil {
+		return false, false
+	}
+	for _, l := range strings.Split(string(out), "\n") {
+		if l == "/bin/sh" || l == "/usr/bin/sh" {
+			return true, true
+		}
+	}
+	return false, true
 }

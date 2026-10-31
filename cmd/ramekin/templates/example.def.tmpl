@@ -1,0 +1,18 @@
+# Apptainer definition file for [[.Name]]. `ramekin build` builds it for the
+# device's platform (see "Converting a Dockerfile or container image" in the
+# Ramekin README for the Dockerfile equivalents).
+Bootstrap: docker
+From: cgr.dev/chainguard/wolfi-base:latest
+
+%files
+    app.sh /usr/local/bin/app
+
+%post
+    chmod 0755 /usr/local/bin/app
+    # Add packages from the Wolfi repository; keep the image small.
+    # apk add --no-cache python-3.12
+
+%runscript
+    # ramekind runs this on the device. Handle SIGTERM (as app.sh does) so
+    # updates can stop the app gracefully.
+    exec /usr/local/bin/app "$@"

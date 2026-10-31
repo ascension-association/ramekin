@@ -8,7 +8,7 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 - **Safe updates.** A new version must prove it's healthy before it replaces the old one. If it doesn't, the device rolls back on its own.
 - **Secure by default.** Every image is signed and scanned for known vulnerabilities, and fleet releases are encrypted.
 - **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager on the device, just your app and one small agent.
-- **Familiar tools.** Write a `Containerfile` like you already do, or build interactively in a shell.
+- **Simple tooling.** Describe your app in an [Apptainer](https://apptainer.org) definition file (a Dockerfile converts in minutes), or build it interactively in a shell. Apptainer is the only container tool you need.
 
 ## Quick start: a TodoMVC app
 
@@ -17,7 +17,6 @@ Build a full-stack [TodoMVC](https://todomvc.com) app, with a web page, an API a
 **Prerequisites on the workstation:**
 - Go
 - `apptainer`
-- `podman` or `docker`
 - [`gok`](https://gokrazy.org/quickstart/) to flash the device
 - Optionally, [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype) for CVE scans. Without them, pass `--no-scan` to `build` and `push`.
 
@@ -202,27 +201,41 @@ Fetch the SQLite driver, which is pure Go, so cross-compiling needs no C toolcha
 go mod init todomvc && go mod tidy
 ```
 
-Replace the generated `Containerfile` with:
+Replace the generated `example.def` with this two-stage [definition file](https://apptainer.org/docs/user/main/definition_files.html). The first stage compiles the server, and the second is what runs on the device:
 
-```dockerfile
-# Compile natively on the workstation and cross-compile for the device: no qemu needed.
-FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/go:latest AS build
-ARG TARGETOS TARGETARCH
-ENV GOMODCACHE=/cache/mod GOCACHE=/cache/build
-WORKDIR /src
-COPY go.mod go.sum ./
-RUN --mount=type=cache,target=/cache go mod download
-COPY main.go index.html ./
-RUN --mount=type=cache,target=/cache \
-    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=-s -o /todomvc .
+```singularity
+# Build stage: runs on the workstation's architecture and cross-compiles for
+# the device ({{ TARGETOS }}/{{ TARGETARCH }}), so no emulation is needed.
+Bootstrap: docker
+From: cgr.dev/chainguard/go:latest
+Stage: build
 
-FROM cgr.dev/chainguard/wolfi-base:latest
-COPY --from=build /todomvc /usr/bin/todomvc
-# The database lives in /data, which persists across updates and rollbacks.
-CMD ["/usr/bin/todomvc", "-addr", ":80", "-db", "/data/todos.db"]
+%files
+    go.mod /src/
+    go.sum /src/
+    main.go /src/
+    index.html /src/
+
+%post
+    cd /src
+    # /cache persists between builds, so rebuilds take seconds.
+    export GOMODCACHE=/cache/go/mod GOCACHE=/cache/go/build
+    CGO_ENABLED=0 GOOS={{ TARGETOS }} GOARCH={{ TARGETARCH }} go build -trimpath -ldflags=-s -o /todomvc .
+
+# Final stage: what runs on the device, built for its platform.
+Bootstrap: docker
+From: cgr.dev/chainguard/wolfi-base:latest
+Stage: final
+
+%files from build
+    /todomvc /usr/bin/todomvc
+
+%runscript
+    # The database lives in /data, which persists across updates and rollbacks.
+    exec /usr/bin/todomvc -addr :80 -db /data/todos.db "$@"
 ```
 
-**3. Build.** The first build takes about 15 seconds; later builds take a few seconds. It produces a 10 MiB SIF and scans it. On wolfi-base, expect zero findings.
+**3. Build.** The first build takes about 30 seconds, including the vulnerability scan; rebuilds take about 10. It produces a 10 MiB SIF. On wolfi-base, expect zero findings.
 
 ```sh
 ramekin build
@@ -275,7 +288,7 @@ Your workstation builds the app into a single file (an [Apptainer](https://appta
 ```mermaid
 flowchart LR
   subgraph Workstation
-    A[Containerfile<br/>or overlay.img] -->|ramekin build| B[app.sif]
+    A[definition file<br/>or overlay.img] -->|ramekin build| B[app.sif]
     B -->|syft + grype| C{CVE policy}
     B -->|ramekin push| D
     C -->|ramekin publish<br/>sign + age-encrypt| S3
@@ -433,11 +446,18 @@ An instance that already uses a non-default port keeps it.
 </details>
 
 <details>
-<summary><strong>Building with a Containerfile or a persistent overlay</strong></summary>
+<summary><strong>Building with a definition file or a persistent overlay</strong></summary>
 
 Set `source.mode` in `ramekin.yaml`.
 
-**Containerfile mode (infrastructure as code)** is what the quick start uses. Ramekin builds with podman or docker for `platform` and converts the image to a SIF.
+**Definition file mode (infrastructure as code)** is the default and what the quick start uses. `ramekin build` runs `apptainer build` on your definition file (`source.def` in `ramekin.yaml`; `ramekin init` creates `example.def`, and you can name it anything) with a few additions for devices:
+
+- **Build stages run natively; the final stage is built for the device.** Apptainer's own `--arch` applies to every stage, which would run compilers under emulation. Instead, Ramekin builds on the workstation's architecture and pins only the final stage's base image to the device's platform. It resolves that image at every build, so `latest` keeps receiving fixes. This is the same pattern as Docker's `FROM --platform=$BUILDPLATFORM`.
+- **Build arguments:** `{{ TARGETOS }}` and `{{ TARGETARCH }}` (the device, e.g. `linux`/`arm64`) and `{{ BUILDARCH }}` (the workstation), for cross-compiling in a build stage.
+- **A persistent build cache at `/cache`** in every stage's `%post`. It lives in `build/cache`. Point tool caches at it (`GOCACHE`, `PIP_CACHE_DIR`, `npm_config_cache`, ...) to make rebuilds fast.
+- **Emulation where needed:** `%post` in the final stage runs as the device's architecture, under qemu binfmt when that differs from the workstation's, so keep heavy work in build stages.
+
+Relative `%files` paths resolve from the definition file's directory, and the definition Ramekin actually builds is saved as `build/.ramekin.def`.
 
 **Overlay mode (persistent overlay):**
 1. Run `ramekin overlay init` to pull the base image and create `overlay.img`.
@@ -446,6 +466,49 @@ Set `source.mode` in `ramekin.yaml`.
 4. `ramekin build` flattens base plus overlay into one SIF, including deletions.
 
 A device trusts exactly one signing key: the project's `keys/ramekin-sign.pub`, which `device init` bakes in. To push a different project to the same device, copy over its `keys/` and `.ramekin/` directories, or run `device init` again.
+
+A device trusts exactly one signing key: the project's `keys/ramekin-sign.pub`, which `device init` bakes in. To push a different project to the same device, copy over its `keys/` and `.ramekin/` directories, or run `device init` again.
+
+</details>
+
+<details>
+<summary><strong>Converting a Dockerfile or container image</strong></summary>
+
+**An existing image** needs only two lines. Apptainer turns the image's `ENTRYPOINT`, `CMD` and `ENV` into the container's runscript and environment:
+
+```singularity
+Bootstrap: docker
+From: ghcr.io/you/your-app:1.2.3
+```
+
+Images that exist only on your workstation can be read with `Bootstrap: docker-daemon` (from a running Docker), or saved first with `docker save -o app.tar your-app` and read with `Bootstrap: docker-archive` and `From: app.tar` (`oci-archive` works the same way). Make sure the image matches the device's architecture: Ramekin only selects the platform automatically for registry images (`Bootstrap: docker`).
+
+**A Dockerfile** maps onto definition file sections like this:
+
+| Dockerfile | Definition file |
+|---|---|
+| `FROM image` | `Bootstrap: docker` and `From: image` |
+| `FROM image AS build` | a stage with `Stage: build` |
+| `COPY --from=build /a /b` | `%files from build` with the line `/a /b` |
+| `RUN cmd` | `%post` (one shell script that stops at the first failing command) |
+| `COPY src dst` | `%files` with the line `src dst` |
+| `ADD url` or an archive | `%post`: `curl -fsSLo ...` / `tar -xf ...` |
+| `ENV KEY=value` | `%environment` with `export KEY=value` (also `export` it in `%post` if the build needs it) |
+| `ARG NAME=default` | `%arguments` with `NAME=default`, used as `{{ NAME }}` |
+| `WORKDIR /dir` | `cd /dir` in `%post` and `%runscript` |
+| `CMD` / `ENTRYPOINT` | `%runscript` with `exec your-app "$@"` |
+| `LABEL key=value` | `%labels` with `key value` |
+| `FROM --platform=$BUILDPLATFORM` | not needed: build stages already run natively; use `{{ TARGETOS }}`/`{{ TARGETARCH }}` |
+| `RUN --mount=type=cache,...` | write caches under `/cache` |
+| `EXPOSE`, `VOLUME`, `USER`, `HEALTHCHECK` | no `.def` equivalent; see below |
+
+The last row covers settings that live on the device instead:
+- **Ports:** the container shares the device's network, so the app's own listen address decides the port; there is nothing to `EXPOSE`.
+- **Persistent data:** `/data` persists across updates. Add more with `ramekin device set --bind`.
+- **User:** the app runs as root on the device. Drop privileges in the app if it needs to.
+- **Health checks:** use `ramekin device set --health-http`, `--health-tcp` or `--health-exec`.
+
+**One requirement:** the final stage needs `/bin/sh`, because ramekind uses it to load the image's environment before running the runscript. Distroless or `scratch`-based images have no shell. Copy the app into a small base such as `cgr.dev/chainguard/wolfi-base` (as the quick start does), or bypass the runscript with `ramekin device set --command "/usr/bin/your-app --flag"`.
 
 </details>
 
@@ -483,7 +546,7 @@ Key files: `keys/ramekin-sign.key` and `keys/*.agekey` are secret (gitignored). 
 - **Kernel requirements.** The kernel needs loop, squashfs and overlayfs. `ramekind` loads them as modules if they aren't built in, and reports what is missing at startup and in its logs.
 - **Encryption is at rest in S3 and in transit, not on the device.** The decrypted SIF on `/perm` is plaintext. Apptainer's native LUKS-encrypted SIFs are not supported by the native runtime.
 - **Workloads should handle SIGTERM.** The container's entrypoint is PID 1, and PID 1 ignores SIGTERM unless it installs a handler. Without one, stops wait `stop_timeout` (10s) before SIGKILL.
-- **Cross-architecture builds** (amd64 workstation, arm64 devices) need qemu binfmt for `RUN` steps or `ramekin shell`.
+- **Cross-architecture builds** (amd64 workstation, arm64 devices) need qemu binfmt for the final stage's `%post` and for `ramekin shell`. Build stages run natively.
 - **A dev push stays in place until the next publish.** Pushed images do not advance the channel serial, so a device that also follows a channel switches back when a newer release is published.
 
 </details>
@@ -501,7 +564,7 @@ internal/container  native SIF runtime (loop + squashfs + overlayfs + namespaces
 internal/sifimg     SIF signing/verification (sylabs/sif)
 internal/manifest   signed channel manifests
 internal/store      S3 (minio-go)
-internal/build      Containerfile and overlay builds
+internal/build      definition file and overlay builds
 internal/scan       syft/grype integration and alerts
 ```
 

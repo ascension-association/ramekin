@@ -1,13 +1,15 @@
 name: [[.Name]]
-# Platform of the target devices. Cross-building needs qemu binfmt support.
+# Platform of the target devices. %post in the final stage runs under qemu
+# binfmt when it differs from the workstation; earlier stages run natively.
 platform: [[.Platform]]
 
 source:
-  # containerfile: build ./Containerfile with podman or docker (infrastructure as code)
-  # overlay:       `ramekin shell` into the base image; changes persist in overlay.img
+  # def:     build an Apptainer definition file (infrastructure as code)
+  # overlay: `ramekin shell` into the base image; changes persist in overlay.img
   mode: [[.Mode]]
-  containerfile: Containerfile
-  context: .
+  # Def mode only: your definition file. Name it whatever you like.
+  def: example.def
+  # Overlay mode only: the base image to start from.
   base: [[.Base]]
   overlay: overlay.img
   overlay_size_mb: 1024

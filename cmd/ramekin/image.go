@@ -37,7 +37,7 @@ func sifArg(p *config.Project, pos []string, i int) string {
 
 func cmdInit(ctx context.Context, args []string) error {
 	fl := flags("init")
-	mode := fl.String("mode", config.ModeContainerfile, "containerfile or overlay")
+	mode := fl.String("mode", config.ModeDef, "def (an Apptainer definition file) or overlay")
 	name := fl.String("name", "", "project name (default: directory name)")
 	platform := fl.String("platform", "linux/arm64", "target platform of the devices")
 	pos, err := parse(fl, args)
@@ -48,8 +48,8 @@ func cmdInit(ctx context.Context, args []string) error {
 	if len(pos) > 0 {
 		dir = pos[0]
 	}
-	if *mode != config.ModeContainerfile && *mode != config.ModeOverlay {
-		return fmt.Errorf("--mode must be %s or %s", config.ModeContainerfile, config.ModeOverlay)
+	if *mode != config.ModeDef && *mode != config.ModeOverlay {
+		return fmt.Errorf("--mode must be %s or %s", config.ModeDef, config.ModeOverlay)
 	}
 	abs, err := filepath.Abs(dir)
 	if err != nil {
@@ -65,7 +65,7 @@ func cmdInit(ctx context.Context, args []string) error {
 		}
 		rel := strings.TrimSuffix(strings.TrimPrefix(path, "templates/"), ".tmpl")
 		rel = strings.ReplaceAll(rel, "dot-", ".")
-		if (rel == "Containerfile" || rel == "app.sh") && *mode != config.ModeContainerfile {
+		if (rel == "example.def" || rel == "app.sh") && *mode != config.ModeDef {
 			return nil
 		}
 		dst := filepath.Join(abs, rel)
@@ -91,7 +91,7 @@ func cmdInit(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	next := "edit Containerfile, then: ramekin keys generate && ramekin build"
+	next := "edit example.def, then: ramekin keys generate && ramekin build"
 	if *mode == config.ModeOverlay {
 		next = "ramekin keys generate && ramekin overlay init && ramekin shell"
 	}
@@ -151,7 +151,7 @@ func cmdShell(ctx context.Context, args []string) error {
 		return err
 	}
 	if p.Source.Mode != config.ModeOverlay {
-		return errors.New("`ramekin shell` is for overlay mode; in containerfile mode edit the Containerfile")
+		return errors.New("`ramekin shell` is for overlay mode; in def mode edit your definition file (source.def in ramekin.yaml)")
 	}
 	return builder(p).Shell(ctx, os.Stdin)
 }
@@ -171,6 +171,7 @@ func cmdBuild(ctx context.Context, args []string) error {
 		return err
 	}
 	fmt.Printf("built %s\n", out)
+	warnNoShell(ctx, out)
 	if *noScan {
 		return nil
 	}
@@ -292,4 +293,16 @@ func removeAll(dir string) {
 		return nil
 	})
 	os.RemoveAll(dir)
+}
+
+// warnNoShell flags images ramekind can't start through their runscript.
+func warnNoShell(ctx context.Context, sif string) {
+	if has, known := build.HasShell(ctx, sif); known && !has {
+		fmt.Fprintf(os.Stderr, `WARNING: %s has no /bin/sh. ramekind starts the app through the image's
+runscript, which needs a shell, so this image would fail its health check on a
+device. Base the final stage on an image with a shell (such as
+cgr.dev/chainguard/wolfi-base), or run the app directly with
+  ramekin device set <device> --command "/path/to/app --flags"
+`, filepath.Base(sif))
+	}
 }

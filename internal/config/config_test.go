@@ -10,7 +10,7 @@ func TestProjectDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Source.Mode != ModeContainerfile || p.Output != "build/demo.sif" || p.Arch() != "arm64" || p.Store.Prefix != "demo" {
+	if p.Source.Mode != ModeDef || p.Source.Def != "example.def" || p.Output != "build/demo.sif" || p.Arch() != "arm64" || p.Store.Prefix != "demo" {
 		t.Fatalf("unexpected defaults: %+v", p)
 	}
 	if _, err := ParseProject([]byte("name: demo\nbogus: 1\n")); err == nil {
@@ -18,6 +18,12 @@ func TestProjectDefaults(t *testing.T) {
 	}
 	if _, err := ParseProject([]byte("name: demo\nsource: {mode: vm}\n")); err == nil {
 		t.Fatal("bad mode accepted")
+	}
+	// Projects from before definition files get a migration hint.
+	for _, old := range []string{"name: demo\nsource: {mode: containerfile}\n", "name: demo\nsource: {containerfile: Containerfile}\n"} {
+		if _, err := ParseProject([]byte(old)); err != errContainerfile {
+			t.Errorf("%q: got %v", old, err)
+		}
 	}
 }
 

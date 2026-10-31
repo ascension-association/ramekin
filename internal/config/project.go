@@ -15,8 +15,8 @@ import (
 const ProjectFile = "ramekin.yaml"
 
 const (
-	ModeContainerfile = "containerfile"
-	ModeOverlay       = "overlay"
+	ModeDef     = "def"
+	ModeOverlay = "overlay"
 
 	DefaultBase = "docker://cgr.dev/chainguard/wolfi-base:latest"
 )
@@ -38,12 +38,10 @@ type Project struct {
 }
 
 type Source struct {
-	Mode string `yaml:"mode"` // containerfile | overlay
+	Mode string `yaml:"mode"` // def | overlay
 
-	// Containerfile mode.
-	Containerfile string `yaml:"containerfile"`
-	Context       string `yaml:"context"`
-	Engine        string `yaml:"engine"` // podman | docker (auto-detected when empty)
+	// Def mode: an Apptainer definition file.
+	Def string `yaml:"def"`
 
 	// Overlay mode.
 	Base          string `yaml:"base"`
@@ -90,13 +88,10 @@ func (p *Project) applyDefaults() {
 	}
 	s := &p.Source
 	if s.Mode == "" {
-		s.Mode = ModeContainerfile
+		s.Mode = ModeDef
 	}
-	if s.Containerfile == "" {
-		s.Containerfile = "Containerfile"
-	}
-	if s.Context == "" {
-		s.Context = "."
+	if s.Def == "" {
+		s.Def = "example.def"
 	}
 	if s.Base == "" {
 		s.Base = DefaultBase
@@ -157,9 +152,11 @@ func (p *Project) validate() error {
 		return fmt.Errorf("name %q must not contain '/' or spaces", p.Name)
 	}
 	switch p.Source.Mode {
-	case ModeContainerfile, ModeOverlay:
+	case ModeDef, ModeOverlay:
+	case "containerfile":
+		return errContainerfile
 	default:
-		return fmt.Errorf("source.mode must be %q or %q", ModeContainerfile, ModeOverlay)
+		return fmt.Errorf("source.mode must be %q or %q", ModeDef, ModeOverlay)
 	}
 	switch strings.ToUpper(p.Store.RetentionMode) {
 	case "GOVERNANCE", "COMPLIANCE":
@@ -209,11 +206,21 @@ func LoadProject(dir string) (*Project, error) {
 	}
 }
 
+// errContainerfile explains the move from Containerfiles to definition files.
+var errContainerfile = errors.New("Containerfile mode was replaced by Apptainer definition files: " +
+	"convert your Containerfile to an Apptainer definition file such as example.def (see \"Converting a Dockerfile or container image\" in the README), " +
+	"then set source.mode: def and source.def to its file name, and remove source.containerfile, source.context and source.engine")
+
 func ParseProject(b []byte) (*Project, error) {
 	var p Project
 	dec := yaml.NewDecoder(strings.NewReader(string(b)))
 	dec.KnownFields(true)
 	if err := dec.Decode(&p); err != nil {
+		for _, old := range []string{"containerfile", "context", "engine"} {
+			if strings.Contains(err.Error(), "field "+old+" not found") {
+				return nil, errContainerfile
+			}
+		}
 		return nil, err
 	}
 	p.applyDefaults()

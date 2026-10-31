@@ -1,4 +1,4 @@
-// ramekin is the developer CLI: build a SIF from a Containerfile or a
+// ramekin is the developer CLI: build a SIF from an Apptainer definition file or a
 // persistent overlay, scan it for CVEs, push it to a test device, and publish
 // it signed and encrypted to an object-locked bucket for the fleet.
 package main
