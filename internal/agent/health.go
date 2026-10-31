@@ -11,10 +11,15 @@ import (
 
 // Health decides whether a freshly started container is good.
 type Health struct {
-	Grace   time.Duration
-	HTTP    string
-	TCP     string
-	Timeout time.Duration
+	Grace time.Duration
+	HTTP  string
+	TCP   string
+	// Exec runs inside the container and must exit 0. It needs ExecProbe.
+	Exec []string
+	// ExecProbe runs argv in the filesystem of the container whose init has
+	// the given PID (see container.Exec).
+	ExecProbe func(ctx context.Context, pid int, argv []string) error
+	Timeout   time.Duration
 	// Poll is the probe interval; zero means 2s.
 	Poll time.Duration
 }
@@ -27,7 +32,7 @@ func (h Health) Check(ctx context.Context, p Process) error {
 		return ctx.Err()
 	case <-time.After(h.Grace):
 	}
-	if h.HTTP == "" && h.TCP == "" {
+	if h.HTTP == "" && h.TCP == "" && len(h.Exec) == 0 {
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(ctx, h.Timeout)
@@ -38,7 +43,7 @@ func (h Health) Check(ctx context.Context, p Process) error {
 	}
 	var last error
 	for {
-		if last = h.probe(ctx); last == nil {
+		if last = h.probe(ctx, p); last == nil {
 			return nil
 		}
 		select {
@@ -51,7 +56,26 @@ func (h Health) Check(ctx context.Context, p Process) error {
 	}
 }
 
-func (h Health) probe(ctx context.Context) error {
+func (h Health) probe(ctx context.Context, p Process) error {
+	if err := h.probeNet(ctx); err != nil {
+		return err
+	}
+	if len(h.Exec) > 0 {
+		pp, ok := p.(interface{ Pid() int })
+		if !ok || h.ExecProbe == nil {
+			return errors.New("health.exec is not supported by this runtime")
+		}
+		// Readiness tools can be slow to answer while a database recovers.
+		ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+		defer cancel()
+		if err := h.ExecProbe(ctx, pp.Pid(), h.Exec); err != nil {
+			return fmt.Errorf("health.exec %s: %w", h.Exec[0], err)
+		}
+	}
+	return nil
+}
+
+func (h Health) probeNet(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
 	if h.TCP != "" {

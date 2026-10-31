@@ -28,12 +28,13 @@ func deviceSet(ctx context.Context, args []string) error {
 	apply := fl.Bool("apply", false, "deploy the change now with `ramekin device update` (reboots the device)")
 	healthHTTP := fl.String("health-http", "", "URL that must return 2xx before a release is accepted (\"\" to remove)")
 	healthTCP := fl.String("health-tcp", "", "host:port that must accept connections before a release is accepted (\"\" to remove)")
+	healthExec := fl.String("health-exec", "", "command run inside the container that must exit 0, e.g. \"pg_isready -h 127.0.0.1\" (\"\" to remove)")
 	grace := fl.Duration("health-grace", 0, "how long a new container must stay up before probing")
 	timeout := fl.Duration("health-timeout", 0, "how long the probes may take to pass")
 	channel := fl.String("channel", "", "release channel to follow")
 	interval := fl.Duration("interval", 0, "how often to poll the channel")
 	hostname := fl.String("hostname", "", "container hostname")
-	command := fl.String("command", "", "command overriding the image's runscript, split on spaces (\"\" to use the runscript)")
+	command := fl.String("command", "", "command overriding the image's runscript, with shell-style quoting (\"\" to use the runscript)")
 	var envs, unsetEnvs, binds, unbinds stringList
 	fl.Var(&envs, "env", "set a container environment variable KEY=VALUE (repeatable)")
 	fl.Var(&unsetEnvs, "unset-env", "remove a container environment variable (repeatable)")
@@ -85,6 +86,11 @@ func deviceSet(ctx context.Context, args []string) error {
 	if set["health-tcp"] {
 		dev.Health.TCP = *healthTCP
 	}
+	if set["health-exec"] {
+		if dev.Health.Exec, err = splitArgs(*healthExec); err != nil {
+			return fmt.Errorf("--health-exec: %w", err)
+		}
+	}
 	if set["health-grace"] {
 		dev.Health.Grace = config.Duration(*grace)
 	}
@@ -101,7 +107,9 @@ func deviceSet(ctx context.Context, args []string) error {
 		dev.Container.Hostname = *hostname
 	}
 	if set["command"] {
-		dev.Container.Command = strings.Fields(*command)
+		if dev.Container.Command, err = splitArgs(*command); err != nil {
+			return fmt.Errorf("--command: %w", err)
+		}
 	}
 	for _, kv := range envs {
 		k, v, ok := strings.Cut(kv, "=")
@@ -206,4 +214,55 @@ func gokrazyDir(flagVal string) string {
 		return filepath.Join(home, "gokrazy")
 	}
 	return "gokrazy"
+}
+
+// splitArgs splits a command line into words, honoring single quotes,
+// double quotes and backslash escapes like a POSIX shell (no expansion).
+func splitArgs(s string) ([]string, error) {
+	var (
+		args    []string
+		cur     strings.Builder
+		inWord  bool
+		quote   rune
+		escaped bool
+	)
+	for _, r := range s {
+		switch {
+		case escaped:
+			cur.WriteRune(r)
+			escaped = false
+		case quote == '\'':
+			if r == '\'' {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '\\':
+			escaped, inWord = true, true
+		case quote == '"':
+			if r == '"' {
+				quote = 0
+			} else {
+				cur.WriteRune(r)
+			}
+		case r == '\'' || r == '"':
+			quote, inWord = r, true
+		case r == ' ' || r == '\t' || r == '\n':
+			if inWord {
+				args = append(args, cur.String())
+				cur.Reset()
+				inWord = false
+			}
+		default:
+			cur.WriteRune(r)
+			inWord = true
+		}
+	}
+	if quote != 0 || escaped {
+		return nil, errors.New("unterminated quote or escape")
+	}
+	if inWord {
+		args = append(args, cur.String())
+	}
+	return args, nil
 }

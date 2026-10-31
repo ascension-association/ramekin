@@ -2,11 +2,14 @@ package container
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
+	"syscall"
 
 	"github.com/ascension-association/ramekin/internal/config"
 	"golang.org/x/sys/unix"
@@ -103,7 +106,7 @@ func setupAndExec(s *spec) error {
 	if len(s.Command) > 0 {
 		argv = s.Command
 		if !strings.Contains(argv[0], "/") {
-			p, err := lookPath(argv[0], env)
+			p, err := lookPath("/", argv[0], env)
 			if err != nil {
 				return err
 			}
@@ -252,7 +255,9 @@ func attachLoop(image string, off, size int64) (string, *os.File, error) {
 	return "", nil, errors.New("no free loop device")
 }
 
-func lookPath(name string, env []string) (string, error) {
+// lookPath finds name on env's PATH inside the filesystem rooted at root
+// and returns its path relative to that root.
+func lookPath(root, name string, env []string) (string, error) {
 	path := defaultPath
 	for _, e := range env {
 		if v, ok := strings.CutPrefix(e, "PATH="); ok {
@@ -261,11 +266,50 @@ func lookPath(name string, env []string) (string, error) {
 	}
 	for _, dir := range filepath.SplitList(path) {
 		p := filepath.Join(dir, name)
-		if fi, err := os.Stat(p); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
+		if fi, err := os.Stat(filepath.Join(root, p)); err == nil && !fi.IsDir() && fi.Mode()&0o111 != 0 {
 			return p, nil
 		}
 	}
 	return "", fmt.Errorf("%s: not found in container PATH", name)
+}
+
+// Exec runs argv inside the filesystem of the running container whose init
+// has the given (host) PID, with the workload's environment, and succeeds
+// only if it exits 0. It uses the container's root via /proc/<pid>/root,
+// which includes the container's mounts (tmpfs, binds, sockets), but it does
+// not join the container's PID namespace.
+func Exec(ctx context.Context, pid int, argv []string) error {
+	root := fmt.Sprintf("/proc/%d/root", pid)
+	env := []string{"PATH=" + defaultPath}
+	if b, err := os.ReadFile(fmt.Sprintf("/proc/%d/environ", pid)); err == nil {
+		if vars := strings.Split(strings.TrimRight(string(b), "\x00"), "\x00"); len(vars) > 0 && vars[0] != "" {
+			env = vars
+		}
+	}
+	path := argv[0]
+	if !strings.Contains(path, "/") {
+		var err error
+		if path, err = lookPath(root, path, env); err != nil {
+			return err
+		}
+	}
+	cmd := exec.CommandContext(ctx, path, argv[1:]...)
+	cmd.Args[0] = argv[0]
+	cmd.Env = env
+	cmd.Dir = "/"
+	cmd.SysProcAttr = &syscall.SysProcAttr{Chroot: root}
+	var out bytes.Buffer
+	cmd.Stdout, cmd.Stderr = &out, &out
+	if err := cmd.Run(); err != nil {
+		if msg := strings.TrimSpace(out.String()); msg != "" {
+			if len(msg) > 300 {
+				msg = msg[:300] + "…"
+			}
+			return fmt.Errorf("%w: %s", err, msg)
+		}
+		return err
+	}
+	return nil
 }
 
 // loadModule loads a kernel module from /lib/modules if it is shipped as a

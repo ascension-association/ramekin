@@ -56,7 +56,10 @@ type Health struct {
 	// HTTP, if set, must return 2xx before Timeout elapses.
 	HTTP string `json:"http,omitempty"`
 	// TCP, if set (host:port), must accept a connection before Timeout elapses.
-	TCP     string   `json:"tcp,omitempty"`
+	TCP string `json:"tcp,omitempty"`
+	// Exec, if set, is run inside the container's filesystem and must exit 0
+	// before Timeout elapses (e.g. ["pg_isready", "-h", "127.0.0.1"]).
+	Exec    []string `json:"exec,omitempty"`
 	Timeout Duration `json:"timeout,omitempty"`
 }
 
@@ -110,6 +113,9 @@ func (d *Device) validate() error {
 		if d.AgeIdentity == "" {
 			return errors.New("age_identity is required when updates are enabled")
 		}
+	}
+	if len(d.Health.Exec) > 0 && d.Health.Exec[0] == "" {
+		return errors.New("health.exec: command must not be empty")
 	}
 	for _, b := range d.Container.Binds {
 		if _, err := ParseBind(b); err != nil {

@@ -102,12 +102,12 @@ func TestDeviceSet(t *testing.T) {
 		return deviceSet(ctx, append([]string{"dev", "--gokrazy-dir", parent}, args...))
 	}
 
-	if err := set("--health-http", "http://127.0.0.1/healthz", "--health-grace", "5s",
+	if err := set("--health-http", "http://127.0.0.1/", "--health-grace", "5s",
 		"--env", "A=1", "--env", "B=2", "--bind", "/dev/ttyUSB0:/dev/ttyUSB0"); err != nil {
 		t.Fatal(err)
 	}
 	d := readDevice(t, cfgPath)
-	if d.Health.HTTP != "http://127.0.0.1/healthz" || time.Duration(d.Health.Grace) != 5*time.Second ||
+	if d.Health.HTTP != "http://127.0.0.1/" || time.Duration(d.Health.Grace) != 5*time.Second ||
 		d.Container.Env["B"] != "2" || len(d.Container.Binds) != 3 || d.APIToken != "secret" {
 		t.Fatalf("after set: %+v", d)
 	}
@@ -143,5 +143,49 @@ func TestDeviceSet(t *testing.T) {
 	out, _ := io.ReadAll(r)
 	if err != nil || strings.Contains(string(out), "secret") || !strings.Contains(string(out), "<hidden>") {
 		t.Fatalf("show: err=%v\n%s", err, out)
+	}
+}
+
+func TestSplitArgs(t *testing.T) {
+	for in, want := range map[string][]string{
+		`pg_isready -h 127.0.0.1`:               {"pg_isready", "-h", "127.0.0.1"},
+		`sqlite3 /data/app.db 'select 1'`:       {"sqlite3", "/data/app.db", "select 1"},
+		`sh -c "test -f /tmp/ready && echo ok"`: {"sh", "-c", "test -f /tmp/ready && echo ok"},
+		`a\ b "it's" ''`:                        {"a b", "it's", ""},
+		`   `:                                   nil,
+	} {
+		got, err := splitArgs(in)
+		if err != nil || strings.Join(got, "|") != strings.Join(want, "|") || len(got) != len(want) {
+			t.Errorf("splitArgs(%q) = %q, %v; want %q", in, got, err, want)
+		}
+	}
+	for _, bad := range []string{`'open`, `"open`, `trailing\`} {
+		if _, err := splitArgs(bad); err == nil {
+			t.Errorf("splitArgs(%q): want error", bad)
+		}
+	}
+}
+
+func TestDeviceSetHealthExec(t *testing.T) {
+	parent := t.TempDir()
+	cfgPath := filepath.Join(parent, "dev", "config.json")
+	os.MkdirAll(filepath.Dir(cfgPath), 0o700)
+	b, _ := json.Marshal(map[string]any{"Hostname": "dev"})
+	os.WriteFile(cfgPath, b, 0o600)
+	mergeGokrazy(cfgPath, []byte(`{"name":"dev","signing_pubkey":"PEM"}`), "arm64")
+	set := func(args ...string) error {
+		return deviceSet(context.Background(), append([]string{"dev", "--gokrazy-dir", parent}, args...))
+	}
+	if err := set("--health-exec", `sqlite3 /data/app.db 'select 1'`); err != nil {
+		t.Fatal(err)
+	}
+	if got := readDevice(t, cfgPath).Health.Exec; strings.Join(got, "|") != "sqlite3|/data/app.db|select 1" {
+		t.Fatalf("exec = %q", got)
+	}
+	if err := set("--health-exec", `''`); err == nil {
+		t.Fatal("empty command accepted")
+	}
+	if err := set("--health-exec", ""); err != nil || len(readDevice(t, cfgPath).Health.Exec) != 0 {
+		t.Fatalf("clear: %v", err)
 	}
 }

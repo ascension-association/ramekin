@@ -2,6 +2,7 @@ package container
 
 import (
 	"bytes"
+	"context"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -25,9 +26,26 @@ const workload = `package main
 import (
 	"fmt"
 	"os"
+	"time"
 )
 
 func main() {
+	switch os.Args[1] {
+	case "serve": // stay up, with state only visible inside the container
+		os.WriteFile("/tmp/ready", nil, 0o644)
+		for {
+			time.Sleep(time.Hour)
+		}
+	case "fail":
+		fmt.Println("simulated failure")
+		os.Exit(3)
+	case "check": // the health probe
+		if _, err := os.Stat("/tmp/ready"); err != nil {
+			fmt.Println("not ready:", err)
+			os.Exit(1)
+		}
+		return
+	}
 	host, _ := os.Hostname()
 	_, procErr := os.Stat("/proc/self/status")
 	// Writes to the image land in the tmpfs overlay; /data is persistent.
@@ -43,9 +61,9 @@ func main() {
 }
 `
 
-// TestRunSIF exercises the real loop/squashfs/overlay/pivot_root path.
-// Run with: sudo go test ./internal/container
-func TestRunSIF(t *testing.T) {
+// buildSIF builds the workload into a squashfs SIF, at /app and on PATH.
+func buildSIF(t *testing.T, dir string) string {
+	t.Helper()
 	if os.Getuid() != 0 {
 		t.Skip("needs root (sudo go test ./internal/container)")
 	}
@@ -55,9 +73,9 @@ func TestRunSIF(t *testing.T) {
 	if err := Preflight(); err != nil {
 		t.Skip(err)
 	}
-	dir := t.TempDir()
 	rootfs := filepath.Join(dir, "rootfs")
 	os.MkdirAll(filepath.Join(rootfs, "etc"), 0o755)
+	os.MkdirAll(filepath.Join(rootfs, "usr", "bin"), 0o755)
 
 	src := filepath.Join(dir, "main.go")
 	os.WriteFile(src, []byte(workload), 0o644)
@@ -65,6 +83,9 @@ func TestRunSIF(t *testing.T) {
 	build.Env = append(os.Environ(), "CGO_ENABLED=0", "GOFLAGS=")
 	if out, err := build.CombinedOutput(); err != nil {
 		t.Fatalf("build workload: %v\n%s", err, out)
+	}
+	if out, err := exec.Command("cp", filepath.Join(rootfs, "app"), filepath.Join(rootfs, "usr", "bin", "app")).CombinedOutput(); err != nil {
+		t.Fatalf("cp: %v\n%s", err, out)
 	}
 	sq := filepath.Join(dir, "root.squashfs")
 	if out, err := exec.Command("mksquashfs", rootfs, sq, "-noappend", "-quiet").CombinedOutput(); err != nil {
@@ -82,7 +103,14 @@ func TestRunSIF(t *testing.T) {
 		t.Fatal(err)
 	}
 	f.UnloadContainer()
+	return image
+}
 
+// TestRunSIF exercises the real loop/squashfs/overlay/pivot_root path.
+// Run with: sudo go test ./internal/container
+func TestRunSIF(t *testing.T) {
+	dir := t.TempDir()
+	image := buildSIF(t, dir)
 	data := filepath.Join(dir, "data")
 	var out bytes.Buffer
 	rt := &Runtime{
@@ -113,7 +141,7 @@ func TestRunSIF(t *testing.T) {
 	if want := "host=ramekin-test pid=1 proc=true arg=hello"; !strings.Contains(string(got), want) {
 		t.Fatalf("got %q, want %q", got, want)
 	}
-	if _, err := os.Stat(filepath.Join(rootfs, "etc", "scratch")); err == nil {
+	if _, err := os.Stat(filepath.Join(dir, "rootfs", "etc", "scratch")); err == nil {
 		t.Fatal("container write leaked into the image")
 	}
 }
@@ -123,5 +151,46 @@ func TestMergeEnv(t *testing.T) {
 	want := []string{"PATH=/usr/games:/bin", "HOME=/root", "LC_ALL=C"}
 	if strings.Join(got, " ") != strings.Join(want, " ") {
 		t.Fatalf("got %v", got)
+	}
+}
+
+// TestExec checks that a health probe runs inside the container's filesystem,
+// sees its private mounts, and resolves commands on the container's PATH.
+func TestExec(t *testing.T) {
+	dir := t.TempDir()
+	image := buildSIF(t, dir)
+	var out bytes.Buffer
+	rt := &Runtime{
+		Cfg:     config.Container{Command: []string{"/app", "serve"}, Binds: []string{"data:/data"}, TmpfsSizeMB: 16},
+		DataDir: dir,
+		Output:  &out,
+	}
+	p, err := rt.Start(image)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer p.Stop(time.Second)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	for {
+		// /tmp/ready exists only in the container's own tmpfs.
+		err = Exec(ctx, p.Pid(), []string{"app", "check"})
+		if err == nil {
+			break
+		}
+		if ctx.Err() != nil {
+			t.Fatalf("probe never passed: %v\n%s", err, out.String())
+		}
+		time.Sleep(100 * time.Millisecond)
+	}
+	if _, err := os.Stat("/tmp/ready"); err == nil {
+		t.Log("note: host also has /tmp/ready; the positive check is not conclusive")
+	}
+	if err := Exec(ctx, p.Pid(), []string{"/app", "fail"}); err == nil || !strings.Contains(err.Error(), "simulated failure") {
+		t.Fatalf("failing command: %v", err)
+	}
+	if err := Exec(ctx, p.Pid(), []string{"no-such-tool"}); err == nil || !strings.Contains(err.Error(), "not found in container PATH") {
+		t.Fatalf("missing tool: %v", err)
 	}
 }

@@ -65,10 +65,12 @@ func main() {
 			return err
 		},
 		Health: agent.Health{
-			Grace:   time.Duration(cfg.Health.Grace),
-			HTTP:    cfg.Health.HTTP,
-			TCP:     cfg.Health.TCP,
-			Timeout: time.Duration(cfg.Health.Timeout),
+			Grace:     time.Duration(cfg.Health.Grace),
+			HTTP:      cfg.Health.HTTP,
+			TCP:       cfg.Health.TCP,
+			Exec:      cfg.Health.Exec,
+			ExecProbe: container.Exec,
+			Timeout:   time.Duration(cfg.Health.Timeout),
 		},
 		StopTimeout:  time.Duration(cfg.Container.StopTimeout),
 		RestartDelay: time.Duration(cfg.Container.RestartDelay),

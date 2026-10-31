@@ -17,7 +17,7 @@ jobs:
       - name: Native runtime test (root)
         run: |
           sudo apt-get update && sudo apt-get install -y squashfs-tools
-          sudo -E env "PATH=$PATH" go test -run TestRunSIF -v ./internal/container
+          sudo -E env "PATH=$PATH" go test -run "TestRunSIF|TestExec" -v ./internal/container
       - name: Cross-compile the device agent
         run: |
           GOOS=linux GOARCH=arm64 CGO_ENABLED=0 go build ./cmd/ramekind

@@ -172,6 +172,7 @@ func deviceInit(args []string) error {
 	ownKey := fl.Bool("own-key", false, "give the device its own age key instead of the shared fleet key")
 	healthHTTP := fl.String("health-http", "", "URL that must return 2xx for a new release to be accepted")
 	healthTCP := fl.String("health-tcp", "", "host:port that must accept connections for a new release to be accepted")
+	healthExec := fl.String("health-exec", "", "command run inside the container that must exit 0 for a new release to be accepted")
 	report := fl.Bool("report-status", true, "write status/<device>.json to the bucket (needs write access to that prefix)")
 	parent := fl.String("gokrazy-dir", "", "gokrazy parent directory (default ~/gokrazy)")
 	url := fl.String("url", "", "how this workstation reaches the device API (default http://<name>:8095)")
@@ -186,6 +187,10 @@ func deviceInit(args []string) error {
 	p, err := loadProject()
 	if err != nil {
 		return err
+	}
+	execArgs, err := splitArgs(*healthExec)
+	if err != nil {
+		return fmt.Errorf("--health-exec: %w", err)
 	}
 
 	arch, kernel, firmware, eeprom := "arm64", "github.com/gokrazy/kernel.rpi", "github.com/gokrazy/firmware", "github.com/gokrazy/rpi-eeprom"
@@ -242,7 +247,7 @@ func deviceInit(args []string) error {
 			SecretKey: firstNonEmpty(env("RAMEKIN_DEVICE_S3_SECRET_KEY"), env(p.Store.SecretKeyEnv)),
 		},
 		Container: config.Container{Hostname: name},
-		Health:    config.Health{HTTP: *healthHTTP, TCP: *healthTCP},
+		Health:    config.Health{HTTP: *healthHTTP, TCP: *healthTCP, Exec: execArgs},
 	}
 	if dev.Update.Enabled && (dev.Update.Endpoint == "" || dev.Update.Bucket == "") {
 		return errors.New("store.endpoint and store.bucket must be set in ramekin.yaml (or use --no-updates for a dev device)")
