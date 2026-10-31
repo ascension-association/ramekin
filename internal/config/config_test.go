@@ -10,7 +10,7 @@ func TestProjectDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if p.Source.Mode != ModeDef || p.Source.Def != "example.def" || p.Output != "build/demo.sif" || p.Arch() != "arm64" || p.Store.Prefix != "demo" {
+	if p.Source.Mode != ModeDef || p.Source.Def != "example.def" || p.Output != "build/demo.sif" || p.Arch() != "arm64" || p.Releases.Branch != "ramekin-channels" || p.Releases.TokenEnv != "GITHUB_TOKEN" {
 		t.Fatalf("unexpected defaults: %+v", p)
 	}
 	if _, err := ParseProject([]byte("name: demo\nbogus: 1\n")); err == nil {
@@ -38,8 +38,11 @@ func TestDevice(t *testing.T) {
 	if _, err := ParseDevice([]byte(`{}`)); err == nil {
 		t.Fatal("device without signing key accepted")
 	}
-	if _, err := ParseDevice([]byte(`{"signing_pubkey":"x","update":{"enabled":true,"endpoint":"https://e","bucket":"b"}}`)); err == nil {
+	if _, err := ParseDevice([]byte(`{"signing_pubkey":"x","update":{"enabled":true,"url":"https://e"}}`)); err == nil {
 		t.Fatal("updates without age identity accepted")
+	}
+	if _, err := ParseDevice([]byte(`{"signing_pubkey":"x","age_identity":"k","update":{"enabled":true}}`)); err == nil {
+		t.Fatal("updates without a channel URL accepted")
 	}
 }
 

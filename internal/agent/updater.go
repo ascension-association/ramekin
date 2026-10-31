@@ -6,12 +6,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"math/rand/v2"
+	"net/http"
 	"os"
 	"runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -19,19 +22,23 @@ import (
 	"github.com/sigstore/sigstore/pkg/signature"
 
 	"github.com/ascension-association/ramekin/internal/manifest"
-	"github.com/ascension-association/ramekin/internal/store"
+	"github.com/ascension-association/ramekin/internal/release"
 )
 
+// Updater polls a channel over HTTPS. Everything it downloads is verified
+// (signed manifest, image checksum and signature), so the host serving it
+// needs no special trust and the device needs no credentials.
 type Updater struct {
-	Sup      *Supervisor
-	Store    *store.Store
-	Channel  string
-	Verifier signature.Verifier
-	Identity age.Identity
-	Interval time.Duration
-	Device   string
-	Report   bool
-	Log      *log.Logger
+	Sup *Supervisor
+	// URL is the directory of channel manifests: <URL>/<Channel>.json.
+	URL       string
+	Channel   string
+	Verifier  signature.Verifier
+	Identity  age.Identity
+	Interval  time.Duration
+	Device    string
+	StatusURL string // optional: POSTed a DeviceStatus after every check
+	Log       *log.Logger
 
 	mu      sync.Mutex
 	lastErr string
@@ -84,9 +91,10 @@ func (u *Updater) kickCh() chan struct{} {
 
 // Check fetches the channel manifest and installs it if it is new.
 func (u *Updater) Check(ctx context.Context) error {
-	b, err := u.Store.GetBytes(ctx, u.Store.Key(store.Channel(u.Channel)...))
+	chURL := u.channelURL()
+	b, err := release.FetchBytes(ctx, chURL, 1<<20)
 	if err != nil {
-		if store.IsNotFound(err) {
+		if errors.Is(err, release.ErrNotFound) {
 			return nil // nothing published yet
 		}
 		return fmt.Errorf("fetch channel %s: %w", u.Channel, err)
@@ -96,7 +104,7 @@ func (u *Updater) Check(ctx context.Context) error {
 		return err
 	}
 	st := u.Sup.State()
-	if m.Serial <= st.SeenSerial {
+	if m.Serial <= st.SeenSerials[u.Channel] {
 		return nil
 	}
 	if m.Arch != "" && m.Arch != runtime.GOARCH {
@@ -104,11 +112,11 @@ func (u *Updater) Check(ctx context.Context) error {
 	}
 	if cur := st.Current; cur != nil && cur.SHA256 == m.SHA256 {
 		// Already running it (e.g. promoted from another channel); just record the serial.
-		u.Sup.MarkSeen(m.Serial)
+		u.Sup.MarkSeen(u.Channel, m.Serial)
 		return nil
 	}
 	u.Log.Printf("channel %s: new release %s (serial %d), downloading", u.Channel, m.Version, m.Serial)
-	path, err := u.download(ctx, m)
+	path, err := u.download(ctx, chURL, m)
 	if err != nil {
 		return err
 	}
@@ -120,8 +128,16 @@ func (u *Updater) Check(ctx context.Context) error {
 	}, false)
 }
 
-func (u *Updater) download(ctx context.Context, m *manifest.Manifest) (string, error) {
-	rc, err := u.Store.Get(ctx, m.Object)
+func (u *Updater) channelURL() string {
+	return strings.TrimSuffix(u.URL, "/") + "/" + u.Channel + ".json"
+}
+
+func (u *Updater) download(ctx context.Context, chURL string, m *manifest.Manifest) (string, error) {
+	obj, err := release.Resolve(chURL, m.Object)
+	if err != nil {
+		return "", err
+	}
+	rc, err := release.Fetch(ctx, obj)
 	if err != nil {
 		return "", fmt.Errorf("fetch %s: %w", m.Object, err)
 	}
@@ -174,7 +190,7 @@ func receive(r io.Reader, dir string, limit int64) (path, sum string, n int64, e
 	return f.Name(), hex.EncodeToString(h.Sum(nil)), n, nil
 }
 
-// DeviceStatus is what a device publishes to status/<device>.json.
+// DeviceStatus is what a device reports (API /v1/status and update.status_url).
 type DeviceStatus struct {
 	Device    string    `json:"device"`
 	Arch      string    `json:"arch"`
@@ -198,13 +214,27 @@ func (u *Updater) Status() DeviceStatus {
 	}
 }
 
+// ReportStatus POSTs the device's status to StatusURL, if configured.
 func (u *Updater) ReportStatus(ctx context.Context) {
-	if !u.Report {
+	if u.StatusURL == "" {
 		return
 	}
-	b, _ := json.MarshalIndent(u.Status(), "", "  ")
-	key := u.Store.Key(store.Status(u.Device)...)
-	if err := u.Store.Put(ctx, key, bytes.NewReader(b), int64(len(b)), store.PutOpts{ContentType: "application/json"}); err != nil {
+	b, _ := json.Marshal(u.Status())
+	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
+	defer cancel()
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, u.StatusURL, bytes.NewReader(b))
+	if err != nil {
 		u.Log.Printf("report status: %v", err)
+		return
+	}
+	req.Header.Set("Content-Type", "application/json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		u.Log.Printf("report status: %v", err)
+		return
+	}
+	resp.Body.Close()
+	if resp.StatusCode > 299 {
+		u.Log.Printf("report status: %s returned %s", u.StatusURL, resp.Status)
 	}
 }

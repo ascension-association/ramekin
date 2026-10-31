@@ -31,8 +31,11 @@ func deviceSet(ctx context.Context, args []string) error {
 	healthExec := fl.String("health-exec", "", "command run inside the container that must exit 0, e.g. \"pg_isready -h 127.0.0.1\" (\"\" to remove)")
 	grace := fl.Duration("health-grace", 0, "how long a new container must stay up before probing")
 	timeout := fl.Duration("health-timeout", 0, "how long the probes may take to pass")
+	updates := fl.String("updates", "", "on: follow the release channel (its URL comes from this project's releases.github); off: only accept pushes")
+	updateURL := fl.String("update-url", "", "directory of channel manifests to download from (default: this project's GitHub release channels)")
 	channel := fl.String("channel", "", "release channel to follow")
 	interval := fl.Duration("interval", 0, "how often to poll the channel")
+	statusURL := fl.String("status-url", "", "URL the device POSTs a JSON status report to after each check (\"\" to remove)")
 	hostname := fl.String("hostname", "", "container hostname")
 	command := fl.String("command", "", "command overriding the image's runscript, with shell-style quoting (\"\" to use the runscript)")
 	var envs, unsetEnvs, binds, unbinds stringList
@@ -100,8 +103,30 @@ func deviceSet(ctx context.Context, args []string) error {
 	if set["channel"] {
 		dev.Update.Channel = *channel
 	}
+	if set["update-url"] {
+		dev.Update.URL = *updateURL
+	}
+	switch *updates {
+	case "":
+	case "on":
+		dev.Update.Enabled = true
+		if dev.Update.URL == "" {
+			p, err := loadProject()
+			if err != nil || p.Releases.GitHub == "" {
+				return errors.New("--updates on needs releases.github in this project's ramekin.yaml, or --update-url")
+			}
+			dev.Update.URL = p.ChannelURL()
+		}
+	case "off":
+		dev.Update.Enabled = false
+	default:
+		return fmt.Errorf("--updates must be on or off, got %q", *updates)
+	}
 	if set["interval"] {
 		dev.Update.Interval = config.Duration(*interval)
+	}
+	if set["status-url"] {
+		dev.Update.StatusURL = *statusURL
 	}
 	if set["hostname"] {
 		dev.Container.Hostname = *hostname
@@ -196,7 +221,6 @@ func showDevice(dev config.Device) error {
 	}
 	redact(&dev.APIToken)
 	redact(&dev.AgeIdentity)
-	redact(&dev.Update.SecretKey)
 	if dev.SigningPubKey != "" {
 		dev.SigningPubKey = "<set>"
 	}

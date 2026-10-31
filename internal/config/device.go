@@ -26,17 +26,18 @@ type Device struct {
 	Health    Health    `json:"health,omitempty"`
 }
 
+// Update configures channel updates. Devices only download over HTTPS and
+// hold no storage credentials: manifests and images are signed, and images
+// are encrypted, so any static host or CDN can serve them.
 type Update struct {
-	Enabled      bool     `json:"enabled"`
-	Interval     Duration `json:"interval,omitempty"`
-	Channel      string   `json:"channel,omitempty"`
-	ReportStatus bool     `json:"report_status,omitempty"`
-	Endpoint     string   `json:"endpoint,omitempty"`
-	Region       string   `json:"region,omitempty"`
-	Bucket       string   `json:"bucket,omitempty"`
-	Prefix       string   `json:"prefix,omitempty"`
-	AccessKey    string   `json:"access_key,omitempty"`
-	SecretKey    string   `json:"secret_key,omitempty"`
+	Enabled  bool     `json:"enabled"`
+	Interval Duration `json:"interval,omitempty"`
+	Channel  string   `json:"channel,omitempty"`
+	// URL is the directory holding channel manifests; the device fetches
+	// <URL>/<channel>.json.
+	URL string `json:"url,omitempty"`
+	// StatusURL, if set, receives a JSON status report (POST) after each check.
+	StatusURL string `json:"status_url,omitempty"`
 }
 
 type Container struct {
@@ -77,9 +78,6 @@ func (d *Device) applyDefaults() {
 	if u.Channel == "" {
 		u.Channel = "stable"
 	}
-	if u.Region == "" {
-		u.Region = "auto"
-	}
 	c := &d.Container
 	if c.Binds == nil {
 		c.Binds = []string{"data:/data", "/dev:/dev"}
@@ -107,8 +105,8 @@ func (d *Device) validate() error {
 		return errors.New("signing_pubkey is required: unsigned images are never run")
 	}
 	if d.Update.Enabled {
-		if d.Update.Endpoint == "" || d.Update.Bucket == "" {
-			return errors.New("update.endpoint and update.bucket are required when updates are enabled")
+		if !strings.HasPrefix(d.Update.URL, "https://") && !strings.HasPrefix(d.Update.URL, "http://") {
+			return errors.New("update.url (an http(s) URL) is required when updates are enabled")
 		}
 		if d.AgeIdentity == "" {
 			return errors.New("age_identity is required when updates are enabled")

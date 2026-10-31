@@ -1,15 +1,14 @@
 package main
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"slices"
 	"strings"
@@ -18,27 +17,36 @@ import (
 	"filippo.io/age"
 	"github.com/sigstore/sigstore/pkg/signature"
 
-	"github.com/ascension-association/ramekin/internal/agent"
 	"github.com/ascension-association/ramekin/internal/config"
 	"github.com/ascension-association/ramekin/internal/keys"
 	"github.com/ascension-association/ramekin/internal/manifest"
+	"github.com/ascension-association/ramekin/internal/release"
 	"github.com/ascension-association/ramekin/internal/scan"
 	"github.com/ascension-association/ramekin/internal/sifimg"
-	"github.com/ascension-association/ramekin/internal/store"
 )
 
-func openStore(p *config.Project) (*store.Store, error) {
-	if p.Store.Endpoint == "" || p.Store.Bucket == "" {
-		return nil, errors.New("set store.endpoint and store.bucket in ramekin.yaml")
+const (
+	assetImage    = ".sif.age" // suffix after the app name
+	assetSBOM     = "sbom.json"
+	assetManifest = "manifest.json"
+)
+
+// githubClient returns the release client. Publishing needs a token;
+// read-only commands work without one on public repositories.
+func githubClient(p *config.Project, needToken bool) (*release.GitHub, error) {
+	if p.Releases.GitHub == "" {
+		return nil, errors.New("set releases.github (owner/repo) in ramekin.yaml")
 	}
-	ak, sk := env(p.Store.AccessKeyEnv), env(p.Store.SecretKeyEnv)
-	if ak == "" || sk == "" {
-		return nil, fmt.Errorf("set %s and %s", p.Store.AccessKeyEnv, p.Store.SecretKeyEnv)
+	token := firstNonEmpty(env(p.Releases.TokenEnv), env("GH_TOKEN"))
+	if token == "" {
+		if out, err := exec.Command("gh", "auth", "token").Output(); err == nil {
+			token = strings.TrimSpace(string(out))
+		}
 	}
-	return store.New(store.Options{
-		Endpoint: p.Store.Endpoint, Region: p.Store.Region, Bucket: p.Store.Bucket,
-		Prefix: p.Store.Prefix, AccessKey: ak, SecretKey: sk,
-	})
+	if token == "" && needToken {
+		return nil, fmt.Errorf("a GitHub token is needed to publish: set %s, or log in with `gh auth login`", p.Releases.TokenEnv)
+	}
+	return &release.GitHub{Repo: p.Releases.GitHub, Branch: p.Releases.Branch, Token: token}, nil
 }
 
 func cmdPublish(ctx context.Context, args []string) error {
@@ -46,7 +54,6 @@ func cmdPublish(ctx context.Context, args []string) error {
 	version := fl.String("version", "", "release version (required, immutable once published)")
 	channel := fl.String("channel", "", "channel to point at the release (default: first in ramekin.yaml)")
 	allowVulns := fl.Bool("allow-vulns", false, "publish even if findings reach scan.fail_on")
-	skipLockCheck := fl.Bool("skip-lock-check", false, "don't require bucket versioning and object lock")
 	pos, err := parse(fl, args)
 	if err != nil {
 		return err
@@ -72,20 +79,18 @@ func cmdPublish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := openStore(p)
+	gh, err := githubClient(p, true)
 	if err != nil {
 		return err
 	}
-	if !*skipLockCheck {
-		if err := st.CheckBucket(ctx); err != nil {
-			return fmt.Errorf("%w (or pass --skip-lock-check)", err)
-		}
-	}
-	objKey := st.Key(store.ReleaseObject(p.Name, *version)...)
-	if exists, err := st.Exists(ctx, objKey); err != nil {
+	if err := gh.CheckRepo(ctx); err != nil {
 		return err
-	} else if exists {
-		return fmt.Errorf("version %s is already published; releases are immutable, pick a new version", *version)
+	}
+	tag := release.Tag(p.Name, *version)
+	if _, err := gh.GetRelease(ctx, tag); err == nil {
+		return fmt.Errorf("version %s is already published (release %s); releases are immutable, pick a new version", *version, tag)
+	} else if !errors.Is(err, release.ErrNotFound) {
+		return err
 	}
 
 	src := sifArg(p, pos, 0)
@@ -99,7 +104,7 @@ func cmdPublish(ctx context.Context, args []string) error {
 	}
 
 	// 1. Scan: the release gate.
-	sbom := filepath.Join(outDir, "sbom.json")
+	sbom := filepath.Join(outDir, assetSBOM)
 	rep, err := scanSIF(ctx, p, signed, sbom)
 	if err != nil {
 		return err
@@ -118,41 +123,59 @@ func cmdPublish(ctx context.Context, args []string) error {
 	}
 
 	// 3. Encrypt.
-	enc := signed + ".age"
+	imageName := p.Name + assetImage
+	enc := filepath.Join(outDir, imageName)
 	if err := encryptFile(signed, enc, recipients); err != nil {
 		return err
 	}
 	fmt.Printf("signed and encrypted for %d recipient(s): %s\n", len(recipients), enc)
 
-	// 4. Upload immutable artifacts with object-lock retention.
-	lock := store.PutOpts{Mode: p.Store.RetentionMode}
-	if p.Store.RetentionDays > 0 {
-		lock.RetainUntil = time.Now().AddDate(0, 0, p.Store.RetentionDays)
-	}
+	// 4. Release: create a draft, upload, publish. (Immutable releases only
+	// accept assets while they are drafts.) Asset URLs are stable, so the
+	// manifest can be signed before the release exists.
 	m := &manifest.Manifest{
 		Name: p.Name, Version: *version, Arch: p.Arch(),
-		Object: objKey, SHA256: sum, Size: size,
-		SBOM:      st.Key(store.ReleaseSBOM(*version)...),
+		Object: gh.AssetURL(tag, imageName), SHA256: sum, Size: size,
+		SBOM:      gh.AssetURL(tag, assetSBOM),
 		Published: time.Now().UTC(),
 		Vulns:     rep.Counts(),
 	}
-	releaseManifest, err := manifest.Sign(m, signer)
+	env, err := manifest.Sign(m, signer)
 	if err != nil {
 		return err
 	}
-	if err := putFile(ctx, st, enc, objKey, "application/octet-stream", lock); err != nil {
+	manifestFile := filepath.Join(outDir, assetManifest)
+	if err := os.WriteFile(manifestFile, env, 0o644); err != nil {
 		return err
 	}
-	if err := putFile(ctx, st, sbom, m.SBOM, "application/json", lock); err != nil {
+	c := rep.Counts()
+	notes := fmt.Sprintf("Ramekin release of %s %s for linux/%s.\n\nVulnerabilities at publish time: critical=%d high=%d medium=%d low=%d.\n\nThe image is signed and encrypted; devices verify it before installing.",
+		p.Name, *version, p.Arch(), c["critical"], c["high"], c["medium"], c["low"])
+	draft, err := gh.CreateDraft(ctx, tag, p.Name+" "+*version, notes)
+	if err != nil {
 		return err
 	}
-	if err := putBytes(ctx, st, releaseManifest, st.Key(store.ReleaseManifest(*version)...), lock); err != nil {
+	for _, a := range []struct{ name, file, ctype string }{
+		{imageName, enc, "application/octet-stream"},
+		{assetSBOM, sbom, "application/json"},
+		{assetManifest, manifestFile, "application/json"},
+	} {
+		if err := gh.UploadAsset(ctx, draft, a.name, a.file, a.ctype); err != nil {
+			return fmt.Errorf("upload %s: %w", a.name, err)
+		}
+	}
+	pub, err := gh.Publish(ctx, draft)
+	if err != nil {
 		return err
 	}
-	fmt.Printf("uploaded %s (retained until %s, %s)\n", objKey, lock.RetainUntil.Format(time.DateOnly), lock.Mode)
+	if pub.Immutable {
+		fmt.Printf("published %s (immutable)\n", pub.HTMLURL)
+	} else {
+		fmt.Printf("published %s\n  note: immutable releases are off for %s, so this release's assets can still be replaced or deleted.\n  Turn them on under Settings > General > Releases.\n", pub.HTMLURL, p.Releases.GitHub)
+	}
 
 	// 5. Point the channel at it.
-	return pointChannel(ctx, p, st, signer, m, *channel)
+	return pointChannel(ctx, gh, signer, m, p.Name, *channel)
 }
 
 func cmdPromote(ctx context.Context, args []string) error {
@@ -180,11 +203,11 @@ func cmdPromote(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := openStore(p)
+	gh, err := githubClient(p, true)
 	if err != nil {
 		return err
 	}
-	b, err := st.GetBytes(ctx, st.Key(store.ReleaseManifest(pos[0])...))
+	b, err := gh.DownloadAsset(ctx, release.Tag(p.Name, pos[0]), assetManifest, 1<<20)
 	if err != nil {
 		return fmt.Errorf("release %s: %w", pos[0], err)
 	}
@@ -192,17 +215,20 @@ func cmdPromote(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	return pointChannel(ctx, p, st, signer, m, *channel)
+	return pointChannel(ctx, gh, signer, m, p.Name, *channel)
 }
 
-func pointChannel(ctx context.Context, p *config.Project, st *store.Store, signer signature.Signer, m *manifest.Manifest, channel string) error {
-	key := st.Key(store.Channel(channel)...)
+// pointChannel writes a channel manifest with a new, higher serial.
+func pointChannel(ctx context.Context, gh *release.GitHub, signer signature.Signer, m *manifest.Manifest, name, channel string) error {
+	path := release.ChannelPath(name, channel)
 	var prev int64
-	if b, err := st.GetBytes(ctx, key); err == nil {
-		if old, err := manifest.Unverified(b); err == nil {
-			prev = old.Serial
+	old, sha, err := gh.ReadFile(ctx, path)
+	switch {
+	case err == nil:
+		if om, err := manifest.Unverified(old); err == nil {
+			prev = om.Serial
 		}
-	} else if !store.IsNotFound(err) {
+	case !errors.Is(err, release.ErrNotFound):
 		return err
 	}
 	cm := *m
@@ -212,8 +238,8 @@ func pointChannel(ctx context.Context, p *config.Project, st *store.Store, signe
 	if err != nil {
 		return err
 	}
-	// Channel pointers are overwritten; bucket versioning keeps their history.
-	if err := putBytes(ctx, st, env, key, store.PutOpts{}); err != nil {
+	msg := fmt.Sprintf("%s: point %s at %s", name, channel, cm.Version)
+	if err := gh.WriteFile(ctx, path, append(env, '\n'), sha, msg); err != nil {
 		return err
 	}
 	fmt.Printf("channel %s -> %s %s (serial %d); devices pick it up on their next poll\n", channel, cm.Name, cm.Version, cm.Serial)
@@ -225,7 +251,7 @@ func cmdReleases(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := openStore(p)
+	gh, err := githubClient(p, false)
 	if err != nil {
 		return err
 	}
@@ -235,7 +261,7 @@ func cmdReleases(ctx context.Context, args []string) error {
 	}
 	fmt.Println("channels:")
 	for _, ch := range p.Channels {
-		m, err := channelManifest(ctx, st, verifier, ch)
+		m, err := channelManifest(ctx, gh, verifier, p.Name, ch)
 		switch {
 		case err != nil:
 			fmt.Printf("  %-12s error: %v\n", ch, err)
@@ -245,16 +271,23 @@ func cmdReleases(ctx context.Context, args []string) error {
 			fmt.Printf("  %-12s %-16s serial %d  %s\n", ch, m.Version, m.Serial, m.Published.Format(time.RFC3339))
 		}
 	}
-	objs, err := st.List(ctx, "releases")
+	rs, err := gh.ListReleases(ctx)
 	if err != nil {
 		return err
 	}
 	fmt.Println("releases:")
-	for _, k := range objs {
-		if strings.HasSuffix(k, "/manifest.json") {
-			fmt.Printf("  %s\n", filepath.Base(filepath.Dir(k)))
+	prefix := release.Tag(p.Name, "")
+	for _, r := range rs {
+		if r.Draft || !strings.HasPrefix(r.TagName, prefix) {
+			continue
 		}
+		lock := ""
+		if r.Immutable {
+			lock = "  (immutable)"
+		}
+		fmt.Printf("  %-16s%s\n", strings.TrimPrefix(r.TagName, prefix), lock)
 	}
+	fmt.Printf("devices poll: %s/<channel>.json\n", p.ChannelURL())
 	return nil
 }
 
@@ -270,7 +303,7 @@ func cmdWatch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	st, err := openStore(p)
+	gh, err := githubClient(p, false)
 	if err != nil {
 		return err
 	}
@@ -279,7 +312,7 @@ func cmdWatch(ctx context.Context, args []string) error {
 		return err
 	}
 	for {
-		found, err := watchOnce(ctx, p, st, verifier)
+		found, err := watchOnce(ctx, p, gh, verifier)
 		if *interval == 0 {
 			if err == nil && found > 0 {
 				return fmt.Errorf("%d alerting vulnerabilities in published releases", found)
@@ -297,7 +330,7 @@ func cmdWatch(ctx context.Context, args []string) error {
 	}
 }
 
-func watchOnce(ctx context.Context, p *config.Project, st *store.Store, v signature.Verifier) (int, error) {
+func watchOnce(ctx context.Context, p *config.Project, gh *release.GitHub, v signature.Verifier) (int, error) {
 	tmp, err := os.MkdirTemp("", "ramekin-watch-")
 	if err != nil {
 		return 0, err
@@ -306,15 +339,15 @@ func watchOnce(ctx context.Context, p *config.Project, st *store.Store, v signat
 	total := 0
 	seen := map[string]bool{}
 	for _, ch := range p.Channels {
-		m, err := channelManifest(ctx, st, v, ch)
+		m, err := channelManifest(ctx, gh, v, p.Name, ch)
 		if err != nil {
 			return total, err
 		}
-		if m == nil || m.SBOM == "" || seen[m.Version] {
+		if m == nil || seen[m.Version] {
 			continue
 		}
 		seen[m.Version] = true
-		b, err := st.GetBytes(ctx, m.SBOM)
+		b, err := gh.DownloadAsset(ctx, release.Tag(p.Name, m.Version), assetSBOM, 256<<20)
 		if err != nil {
 			return total, fmt.Errorf("sbom for %s: %w", m.Version, err)
 		}
@@ -340,47 +373,11 @@ func watchOnce(ctx context.Context, p *config.Project, st *store.Store, v signat
 	return total, nil
 }
 
-func cmdFleet(ctx context.Context, args []string) error {
-	if len(args) != 1 || args[0] != "status" {
-		return errors.New("usage: ramekin fleet status")
-	}
-	p, err := loadProject()
-	if err != nil {
-		return err
-	}
-	st, err := openStore(p)
-	if err != nil {
-		return err
-	}
-	objs, err := st.List(ctx, "status")
-	if err != nil {
-		return err
-	}
-	fmt.Printf("%-20s %-10s %-16s %-16s %-20s %s\n", "DEVICE", "CHANNEL", "CURRENT", "PREVIOUS", "LAST CHECK", "ERROR")
-	for _, k := range objs {
-		b, err := st.GetBytes(ctx, k)
-		if err != nil {
-			return err
-		}
-		var s agent.DeviceStatus
-		if json.Unmarshal(b, &s) != nil {
-			continue
-		}
-		ver := func(r *agent.Release) string {
-			if r == nil {
-				return "-"
-			}
-			return r.Version
-		}
-		fmt.Printf("%-20s %-10s %-16s %-16s %-20s %s\n", s.Device, s.Channel, ver(s.Current), ver(s.Previous),
-			s.LastCheck.Local().Format(time.DateTime), s.LastError)
-	}
-	return nil
-}
-
-func channelManifest(ctx context.Context, st *store.Store, v signature.Verifier, ch string) (*manifest.Manifest, error) {
-	b, err := st.GetBytes(ctx, st.Key(store.Channel(ch)...))
-	if store.IsNotFound(err) {
+// channelManifest returns a channel's verified manifest, or nil if the
+// channel was never published.
+func channelManifest(ctx context.Context, gh *release.GitHub, v signature.Verifier, name, ch string) (*manifest.Manifest, error) {
+	b, _, err := gh.ReadFile(ctx, release.ChannelPath(name, ch))
+	if errors.Is(err, release.ErrNotFound) {
 		return nil, nil
 	}
 	if err != nil {
@@ -432,29 +429,4 @@ func encryptFile(src, dst string, recipients []age.Recipient) error {
 		return err
 	}
 	return out.Close()
-}
-
-func putFile(ctx context.Context, st *store.Store, path, key, ctype string, o store.PutOpts) error {
-	f, err := os.Open(path)
-	if err != nil {
-		return err
-	}
-	defer f.Close()
-	fi, err := f.Stat()
-	if err != nil {
-		return err
-	}
-	o.ContentType = ctype
-	if err := st.Put(ctx, key, f, fi.Size(), o); err != nil {
-		return fmt.Errorf("upload %s: %w", key, err)
-	}
-	return nil
-}
-
-func putBytes(ctx context.Context, st *store.Store, b []byte, key string, o store.PutOpts) error {
-	o.ContentType = "application/json"
-	if err := st.Put(ctx, key, bytes.NewReader(b), int64(len(b)), o); err != nil {
-		return fmt.Errorf("upload %s: %w", key, err)
-	}
-	return nil
 }

@@ -88,11 +88,11 @@ func TestInstallAndRollback(t *testing.T) {
 	if err := s.Install(ctx, stage(t, dir, "v1"), Release{Version: "v1", SHA256: "s1"}, false); err != nil {
 		t.Fatal(err)
 	}
-	if err := s.Install(ctx, stage(t, dir, "v2"), Release{Version: "v2", SHA256: "s2", Serial: 7}, false); err != nil {
+	if err := s.Install(ctx, stage(t, dir, "v2"), Release{Version: "v2", SHA256: "s2", Serial: 7, Source: "channel:stable"}, false); err != nil {
 		t.Fatal(err)
 	}
 	st := s.State()
-	if st.Current.Version != "v2" || st.Previous.Version != "v1" || st.SeenSerial != 7 {
+	if st.Current.Version != "v2" || st.Previous.Version != "v1" || st.SeenSerials["stable"] != 7 {
 		t.Fatalf("after v2: %+v", st)
 	}
 

@@ -10,9 +10,9 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 - **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager on the device, just your app and one small agent.
 - **Simple tooling.** Describe your app in an [Apptainer](https://apptainer.org) definition file (a Dockerfile converts in minutes), or build it interactively in a shell. Apptainer is the only container tool you need.
 
-## Quick start: a TodoMVC app
+## Quick start: Hello World
 
-Build a full-stack [TodoMVC](https://todomvc.com) app, with a web page, an API and a SQLite database, as one small Go server. Run it on a device, add some todos, then change the app's title and push the update. Your todos are still there afterwards.
+Serve a web page from a device with [nginx](https://nginx.org), then change it and push the update. Each build takes a few seconds.
 
 **Prerequisites on the workstation:**
 - Go
@@ -26,11 +26,90 @@ The examples assume an arm64 board, which is the default `platform`. For a PC or
 
 ```sh
 go install github.com/ascension-association/ramekin/cmd/ramekin@latest
-ramekin init todomvc && cd todomvc && rm app.sh
+ramekin init hello-web && cd hello-web && rm app.sh
 ramekin keys generate
 ```
 
-**2. Write the app.** Create `main.go`, the whole server:
+**2. Write the page.** Create `index.html`:
+
+```html
+<!doctype html>
+<title>Ramekin</title>
+<h1>Hello</h1>
+```
+
+Replace the generated `example.def` with this [definition file](https://apptainer.org/docs/user/main/definition_files.html). It starts from Chainguard's nginx image, adds the page, and serves it on port 80:
+
+```singularity
+# A static web page served by nginx, from Chainguard's minimal image, which
+# is rebuilt often to stay free of known vulnerabilities. The -dev variant
+# includes the shell ramekind uses to start it.
+Bootstrap: docker
+From: cgr.dev/chainguard/nginx:latest-dev
+
+%files
+    index.html /usr/share/nginx/html/index.html
+
+%post
+    # Serve on port 80, which Ramekin keeps free by moving gokrazy's
+    # dashboard to 8181.
+    cat > /etc/nginx/conf.d/nginx.default.conf <<'CONF'
+server {
+    listen 80;
+    root /usr/share/nginx/html;
+}
+CONF
+```
+
+**3. Build.** This produces a 23 MiB SIF and scans it. Expect zero findings.
+
+```sh
+ramekin build
+```
+
+**4. Create and flash a development device.**
+
+```sh
+ramekin device init hello --no-updates --health-http http://127.0.0.1/
+gok -i hello overwrite --full /dev/sdX      # use your SD card or disk; this erases it
+```
+
+- `--no-updates` makes this a dev device: it accepts `ramekin push` and ignores release channels.
+- `--health-http` makes the device accept a new version only after the page returns 200.
+
+**5. Push it and open the page.**
+
+```sh
+ramekin push hello                          # OK: hello is running dev-…
+curl http://hello/                          # <h1>Hello</h1>
+```
+
+**6. Change it and push again.**
+
+```sh
+sed -i 's|<h1>Hello</h1>|<h1>Hello World</h1>|' index.html
+ramekin build && ramekin push hello --version hello-2
+curl http://hello/                          # <h1>Hello World</h1>
+ramekin status hello                        # current: hello-2, previous: the first push
+ramekin logs hello -f
+```
+
+If a new version fails its health check, the device keeps running the old one, and `push` reports `ROLLED BACK`.
+
+This project is in [ramekin-simple-example](https://github.com/ascension-association/ramekin-simple-example), along with [published releases](https://github.com/ascension-association/ramekin-simple-example/releases) of it. To have a fleet of devices update themselves, see "Ship to a fleet of devices" below.
+
+## Learn more
+
+Each section below expands with a click. You don't need any of them to get started.
+
+<details>
+<summary><strong>Advanced Example</strong></summary>
+
+A full-stack [TodoMVC](https://todomvc.com) app, with a web page, an API and a SQLite database, as one small Go server. It shows a two-stage definition file that compiles for the device without emulation, a persistent database in `/data`, and a health check that exercises the app. Its releases are published in [ramekin-advanced-example](https://github.com/ascension-association/ramekin-advanced-example/releases).
+
+Start with step 1 of the quick start, using `ramekin init todomvc` instead of `ramekin init hello-web`. Then:
+
+**1. Write the app.** Create `main.go`, the whole server:
 
 ```go
 // todomvc serves a TodoMVC app: the page, a JSON API, and SQLite storage.
@@ -235,23 +314,23 @@ Stage: final
     exec /usr/bin/todomvc -addr :80 -db /data/todos.db "$@"
 ```
 
-**3. Build.** The first build takes about 30 seconds, including the vulnerability scan; rebuilds take about 10. It produces a 10 MiB SIF. On wolfi-base, expect zero findings.
+**2. Build.** The first build takes about 30 seconds, including the vulnerability scan; rebuilds take about 10. It produces a 10 MiB SIF. On wolfi-base, expect zero findings.
 
 ```sh
 ramekin build
 ```
 
-**4. Create and flash a development device.**
+**3. Create and flash a development device.**
 
 ```sh
 ramekin device init todo --no-updates --health-http http://127.0.0.1/api/todos
 gok -i todo overwrite --full /dev/sdX      # use your SD card or disk; this erases it
 ```
 
-- `--no-updates` makes this a dev device: it accepts `ramekin push` and ignores S3.
+- `--no-updates` makes this a dev device: it accepts `ramekin push` and ignores release channels.
 - `--health-http` makes the device accept a new release only after the API answers, which also proves the database opened.
 
-**5. Push it and add some todos.**
+**4. Push it and add some todos.**
 
 ```sh
 ramekin push todo                          # OK: todo is running dev-…
@@ -264,7 +343,7 @@ curl -X POST -d '{"title":"Buy milk"}' http://todo/api/todos
 curl http://todo/api/todos                 # [{"id":1,"title":"Buy milk","completed":false}]
 ```
 
-**6. Change the title and push again.**
+**5. Change the title and push again.**
 
 ```sh
 sed -i 's|>todos<|>Ramekin todos<|g' index.html
@@ -276,14 +355,12 @@ ramekin logs todo -f
 
 Reload the page to see the new title. The database lives in `/data`, which persists across updates and rollbacks. If a new version fails its health check, the device keeps running the old one, and `push` reports `ROLLED BACK`.
 
-## Learn more
-
-Each section below expands with a click. You don't need any of them to get started.
+</details>
 
 <details>
 <summary><strong>How Ramekin works</strong></summary>
 
-Your workstation builds the app into a single file (an [Apptainer](https://apptainer.org) SIF image). It scans the image for vulnerabilities, then either pushes it straight to a test device or publishes it to an S3 bucket that your fleet watches.
+Your workstation builds the app into a single file (an [Apptainer](https://apptainer.org) SIF image). It scans the image for vulnerabilities, then either pushes it straight to a test device or publishes it as a GitHub release that your fleet watches.
 
 ```mermaid
 flowchart LR
@@ -291,46 +368,58 @@ flowchart LR
     A[definition file<br/>or overlay.img] -->|ramekin build| B[app.sif]
     B -->|syft + grype| C{CVE policy}
     B -->|ramekin push| D
-    C -->|ramekin publish<br/>sign + age-encrypt| S3
+    C -->|ramekin publish<br/>sign + age-encrypt| GH
   end
-  S3[(S3 bucket<br/>versioned + object-locked)]
+  GH[(GitHub Releases<br/>+ channel branch)]
   subgraph Fleet["Device(s): gokrazy + ramekind"]
     D[ramekind] --> E[A/B install<br/>health check<br/>rollback]
   end
-  S3 -->|poll signed channel manifest| D
-  S3 -->|ramekin watch<br/>daily rescan of SBOMs| W[webhook alert]
+  GH -->|HTTPS: poll signed channel manifest| D
+  GH -->|ramekin watch<br/>daily rescan of SBOMs| W[webhook alert]
 ```
 
-The device runs gokrazy's Go init plus one Ramekin program, `ramekind`. There is no shell, no apptainer binary and no package manager on the device. `ramekind` mounts and runs the image itself, and it handles signature checks, decryption, S3 polling, health-gated installs and rollback in-process. Images default to the minimal `cgr.dev/chainguard/wolfi-base`. Ramekin is inspired by CoreOS, RancherOS and Talos.
+The device runs gokrazy's Go init plus one Ramekin program, `ramekind`. There is no shell, no apptainer binary and no package manager on the device. `ramekind` mounts and runs the image itself, and it handles signature checks, decryption, channel polling, health-gated installs and rollback in-process. Images default to the minimal `cgr.dev/chainguard/wolfi-base`. Ramekin is inspired by CoreOS, RancherOS and Talos.
 
 </details>
 
 <details>
 <summary><strong>Ship to a fleet of devices</strong></summary>
 
-Create a bucket in [Sliplane Object Storage](https://sliplane.io/object-storage) with **versioning and object locking enabled**. Both must be chosen when the bucket is created. Put the bucket's endpoint URL (from the dashboard) in `store.endpoint` and the bucket name in `store.bucket`, then:
+Releases are published to [GitHub Releases](https://docs.github.com/en/repositories/releasing-projects-on-github/about-releases): free, served from GitHub's CDN, and with no account to create beyond GitHub.
+
+1. **Pick a repository** for releases and put it in `ramekin.yaml` as `releases.github: owner/repo`. Devices download from it anonymously, so make it public. Images are encrypted, but release names, versions and sizes are visible. A dedicated repository (for example `you/your-app-releases`) keeps the release list tidy.
+2. **Turn on [immutable releases](https://docs.github.com/en/code-security/concepts/supply-chain-security/immutable-releases)** in that repository (**Settings > General > Releases**). A published release's files and tag can then never be changed or deleted.
+3. **Give `ramekin` a token** that can write the repository's contents and releases: `gh auth login`, or a fine-grained token with **Contents: read and write** in `GITHUB_TOKEN`.
 
 ```sh
-export RAMEKIN_S3_ACCESS_KEY=... RAMEKIN_S3_SECRET_KEY=...
-ramekin publish --version 1.0.0           # gate on CVEs, sign, encrypt, upload, point "stable"
+ramekin publish --version 1.0.0           # gate on CVEs, sign, encrypt, create the release, point "stable" at it
 ramekin releases
 ramekin promote 0.9.0 --channel stable    # roll the whole fleet back
 ```
 
-Any S3-compatible store works; set `endpoint` accordingly.
+What gets published:
 
-`publish` refuses to ship if findings reach `scan.fail_on` (default `high`). Accepted risks go in `scan.ignore`; `--allow-vulns` overrides the gate once.
+| Where | What |
+|---|---|
+| Release `<app>-<version>` | `<app>.sif.age` (the signed, encrypted image), `sbom.json`, and `manifest.json` (signed) |
+| Branch `ramekin-channels`, file `<app>/<channel>.json` | The signed channel pointer devices poll, at `https://raw.githubusercontent.com/<owner>/<repo>/ramekin-channels/<app>/<channel>.json` |
+
+The channel pointer has to change with every publish and promote, so it can't live in an immutable release. `publish` creates the `ramekin-channels` branch on first use, with no history from your other branches. In a repository used only for releases, you can keep the pointers on the default branch instead: set `releases.branch: main` in `ramekin.yaml` (the [advanced example](https://github.com/ascension-association/ramekin-advanced-example) does this).
+
+`publish` refuses to ship if findings reach `scan.fail_on` (default `high`). Accepted risks go in `scan.ignore`; `--allow-vulns` overrides the gate once. It also refuses to reuse a version that has already been published.
 
 **Provision fleet devices:**
 
 ```sh
-export RAMEKIN_DEVICE_S3_ACCESS_KEY=... RAMEKIN_DEVICE_S3_SECRET_KEY=...   # read-only key recommended
 ramekin device init sensor-01 --health-http http://127.0.0.1/
 gok --parent_dir ~/gokrazy -i sensor-01 overwrite --full /dev/sdX
-ramekin fleet status
 ```
 
-Each device polls `channels/<channel>.json` every 5 minutes, with jitter. When it finds a newer serial, it downloads, decrypts, verifies and installs the release.
+Each device polls its channel every 5 minutes, with jitter. When it finds a newer serial, it downloads, decrypts, verifies and installs the release. GitHub's CDN caches the channel file for up to 5 minutes, so a publish reaches every device within about 10 minutes.
+
+**Devices need no credentials for updates.** They only download over HTTPS, and everything they download is checked: the channel pointer and manifest are signed by your project key, and the image must match the manifest's SHA-256 and carry a valid signature. So any static host or CDN could serve the same files; set `update.url` in device.json to point a device elsewhere.
+
+**Fleet status:** run `ramekin device set <device> --status-url https://…` to have a device POST a JSON report after every check (its version, previous version, last error and so on) to a webhook or small service of your choice. `ramekin status <device>` shows the same report for a device you can reach directly.
 
 </details>
 
@@ -399,7 +488,7 @@ ramekin device set hello --env LOG_LEVEL=debug --bind /dev/ttyUSB0:/dev/ttyUSB0 
 Without `--apply`, a change takes effect on the next `ramekin device update`. `device set` checks the result with the agent's own validation before saving, so the device never receives a config it would refuse. It also keeps the previous file as `config.json.bak`.
 
 - **Relative bind sources** live under `/perm/ramekin/` and persist across updates.
-- **Settings `device set` doesn't cover** (the API token, keys and S3 credentials) are created by `device init`.
+- **Settings `device set` doesn't cover** (the API token and keys) are created by `device init`.
 
 </details>
 
@@ -431,7 +520,9 @@ This needs a board whose MAC address survives reboots. Some boards generate a ra
 <details>
 <summary><strong>Already have a gokrazy device?</strong></summary>
 
-If `~/gokrazy/<device>` already exists, `ramekin device init <device>` adds ramekind to it instead of creating a new instance. Your other packages and settings are kept, and a backup is saved as `config.json.bak`.
+If `~/gokrazy/<device>` already exists, `ramekin device init <device>` adds ramekind to it instead of creating a new instance. Your other settings are kept, and a backup is saved as `config.json.bak`.
+
+**Ramekin devices run exactly two gokrazy packages:** `github.com/ascension-association/ramekin/cmd/ramekind` and `github.com/ascension-association/gk-lockscreen`. The kernel comes from `KernelPackage`, which must be a repository named `kernel` or `kernel.<name>` (gok's default, `github.com/gokrazy/kernel.rpi`, if unset). `device init` and every `device update` enforce this. They remove any other package from `Packages`, such as `breakglass`, `serial-busybox` or a kernel listed there, together with its `PackageConfig`, add a missing ramekind or gk-lockscreen, and print what changed. Kernel repositories are removed from `Packages` too: gok takes the kernel only from `KernelPackage`. gokrazy's own system services (DHCP, NTP and so on) are configured separately and aren't affected.
 
 ```sh
 gok -i hello add github.com/ascension-association/ramekin/cmd/ramekind   # or a local checkout's cmd/ramekind
@@ -508,7 +599,7 @@ The last row covers settings that live on the device instead:
 - **User:** the app runs as root on the device. Drop privileges in the app if it needs to.
 - **Health checks:** use `ramekin device set --health-http`, `--health-tcp` or `--health-exec`.
 
-**One requirement:** the final stage needs `/bin/sh`, because ramekind uses it to load the image's environment before running the runscript. Distroless or `scratch`-based images have no shell. Copy the app into a small base such as `cgr.dev/chainguard/wolfi-base` (as the quick start does), or bypass the runscript with `ramekin device set --command "/usr/bin/your-app --flag"`.
+**One requirement:** the final stage needs `/bin/sh`, because ramekind uses it to load the image's environment before running the runscript. Distroless or `scratch`-based images have no shell. Use an image variant with a shell (the quick start uses Chainguard's `nginx:latest-dev` rather than `nginx:latest`), copy the app into a small base such as `cgr.dev/chainguard/wolfi-base` (as the advanced example does), or bypass the runscript with `ramekin device set --command "/usr/bin/your-app --flag"`.
 
 </details>
 
@@ -528,14 +619,16 @@ The last row covers settings that live on the device instead:
 | Concern | Mechanism |
 |---|---|
 | Only your images run | SIF signed with an ECDSA P-256 key (DSSE, interoperable with `apptainer sign/verify --key`). The device verifies it in-process before every install. |
-| Bucket tampering / replay | The channel manifest is signed. Devices ignore serials ≤ the highest they have acted on. |
-| Confidentiality in S3 | SIFs are encrypted with [age](https://age-encryption.org) to the fleet key and/or per-device keys (`device init --own-key`). |
-| Immutable history | Releases are uploaded with S3 object-lock retention (`retention_days`, `GOVERNANCE`/`COMPLIANCE`). Channel pointers are versioned. |
+| Tampered or replayed downloads | The channel manifest is signed. Devices ignore serials ≤ the highest they have acted on for that channel, and check each image's SHA-256 and signature. |
+| Confidentiality of releases | SIFs are encrypted with [age](https://age-encryption.org) to the fleet key and/or per-device keys (`device init --own-key`), so a public release repository exposes only names and sizes. |
+| Immutable history | `publish` never reuses a version. With GitHub's immutable releases turned on, a published release's files and tag can't be changed or deleted; `publish` says when they're off. The channel branch's git history records every publish and promote. |
 | Push API | Bearer token per device, generated by `device init`. |
+| Minimal devices | Each device runs gokrazy's system services, ramekind and gk-lockscreen, and nothing else: no shell, no SSH, no other packages. `device init` and `device update` enforce this. |
+| No storage credentials on devices | Devices only download, anonymously, over HTTPS. Only the workstation (or CI) holds a GitHub token. |
 
 Key files: `keys/ramekin-sign.key` and `keys/*.agekey` are secret (gitignored). `keys/ramekin-sign.pub` and `keys/recipients.txt` are safe to commit. In CI, pass the signing key PEM in `RAMEKIN_SIGNING_KEY`.
 
-`~/gokrazy/<device>/config.json` contains the device's secrets: API token, age identity and S3 credentials. Keep it private. gokrazy places them in the device root filesystem, so anyone holding the SD card has them. Use read-only, prefix-scoped S3 credentials for devices.
+`~/gokrazy/<device>/config.json` contains the device's secrets: its API token and age identity. Keep it private. gokrazy places them in the device root filesystem, so anyone holding the SD card has them; with the shared fleet key, that means they can decrypt releases, so use `device init --own-key` where that matters.
 
 </details>
 
@@ -544,7 +637,7 @@ Key files: `keys/ramekin-sign.key` and `keys/*.agekey` are secret (gitignored). 
 
 - **Isolation is for packaging, not security.** The container runs as root with mount, PID, IPC and UTS namespaces, but shares the host network and, by default, host `/dev`, which is what GPIO, serial and USB workloads need.
 - **Kernel requirements.** The kernel needs loop, squashfs and overlayfs. `ramekind` loads them as modules if they aren't built in, and reports what is missing at startup and in its logs.
-- **Encryption is at rest in S3 and in transit, not on the device.** The decrypted SIF on `/perm` is plaintext. Apptainer's native LUKS-encrypted SIFs are not supported by the native runtime.
+- **Encryption is at rest in the release repository and in transit, not on the device.** The decrypted SIF on `/perm` is plaintext. Apptainer's native LUKS-encrypted SIFs are not supported by the native runtime.
 - **Workloads should handle SIGTERM.** The container's entrypoint is PID 1, and PID 1 ignores SIGTERM unless it installs a handler. Without one, stops wait `stop_timeout` (10s) before SIGKILL.
 - **Cross-architecture builds** (amd64 workstation, arm64 devices) need qemu binfmt for the final stage's `%post` and for `ramekin shell`. Build stages run natively.
 - **A dev push stays in place until the next publish.** Pushed images do not advance the channel serial, so a device that also follows a channel switches back when a newer release is published.
@@ -563,7 +656,7 @@ internal/agent      supervisor (A/B install, rollback), updater, HTTP API
 internal/container  native SIF runtime (loop + squashfs + overlayfs + namespaces)
 internal/sifimg     SIF signing/verification (sylabs/sif)
 internal/manifest   signed channel manifests
-internal/store      S3 (minio-go)
+internal/release    GitHub Releases publishing and HTTPS downloads
 internal/build      definition file and overlay builds
 internal/scan       syft/grype integration and alerts
 ```

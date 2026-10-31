@@ -25,6 +25,80 @@ import (
 
 const ramekindPkg = "github.com/ascension-association/ramekin/cmd/ramekind"
 
+const lockscreenPkg = "github.com/ascension-association/gk-lockscreen"
+
+// Ramekin devices run exactly ramekind and gk-lockscreen as gokrazy Packages.
+// The kernel comes from KernelPackage, which must be a repository named
+// "kernel" or "kernel.<something>". gokrazy's own system services are
+// configured separately (GokrazyPackages).
+
+func isKernelPackage(pkg string) bool {
+	parts := strings.Split(pkg, "/")
+	if len(parts) < 3 {
+		return false
+	}
+	repo := parts[2] // host/owner/repo[/...]
+	return repo == "kernel" || strings.HasPrefix(repo, "kernel.")
+}
+
+func allowedPackage(pkg string) bool {
+	return pkg == ramekindPkg || pkg == lockscreenPkg
+}
+
+// enforcePackages makes a gokrazy config's Packages exactly the allowed set:
+// it removes anything else (and its PackageConfig) and adds missing required
+// packages. It fails if KernelPackage isn't a kernel repository.
+func enforcePackages(cfg map[string]any) (removed, added []string, err error) {
+	pkgs, _ := cfg["Packages"].([]any)
+	// gok fetches KernelPackage without building it (it only builds main
+	// packages listed in Packages); unset means its default,
+	// github.com/gokrazy/kernel.rpi.
+	if k, set := cfg["KernelPackage"]; set {
+		if ks, _ := k.(string); !isKernelPackage(ks) {
+			return nil, nil, fmt.Errorf("KernelPackage %q must be a repository named kernel or kernel.<name>", k)
+		}
+	}
+	var keep []any
+	have := map[string]bool{}
+	for _, p := range pkgs {
+		s, _ := p.(string)
+		switch {
+		case have[s]:
+		case allowedPackage(s):
+			keep = append(keep, s)
+			have[s] = true
+		default:
+			removed = append(removed, fmt.Sprint(p))
+		}
+	}
+	for _, req := range []string{ramekindPkg, lockscreenPkg} {
+		if !have[req] {
+			keep = append(keep, req)
+			added = append(added, req)
+		}
+	}
+	cfg["Packages"] = keep
+	if pc, ok := cfg["PackageConfig"].(map[string]any); ok {
+		for _, r := range removed {
+			delete(pc, r)
+		}
+	}
+	return removed, added, nil
+}
+
+func reportPackages(cfgPath string, removed, added []string) {
+	if len(removed)+len(added) == 0 {
+		return
+	}
+	fmt.Fprintf(os.Stderr, "%s: Ramekin devices run exactly ramekind and gk-lockscreen (plus the KernelPackage)\n", cfgPath)
+	for _, r := range removed {
+		fmt.Fprintf(os.Stderr, "  removed %s\n", r)
+	}
+	for _, a := range added {
+		fmt.Fprintf(os.Stderr, "  added   %s\n", a)
+	}
+}
+
 // dashboardPort is where Ramekin devices serve the gokrazy web interface and
 // update API, keeping port 80 free for the container (which shares the host
 // network).
@@ -173,7 +247,7 @@ func deviceInit(args []string) error {
 	healthHTTP := fl.String("health-http", "", "URL that must return 2xx for a new release to be accepted")
 	healthTCP := fl.String("health-tcp", "", "host:port that must accept connections for a new release to be accepted")
 	healthExec := fl.String("health-exec", "", "command run inside the container that must exit 0 for a new release to be accepted")
-	report := fl.Bool("report-status", true, "write status/<device>.json to the bucket (needs write access to that prefix)")
+	statusURL := fl.String("status-url", "", "URL the device POSTs a JSON status report to after each update check (optional)")
 	parent := fl.String("gokrazy-dir", "", "gokrazy parent directory (default ~/gokrazy)")
 	url := fl.String("url", "", "how this workstation reaches the device API (default http://<name>:8095)")
 	pos, err := parse(fl, args)
@@ -233,27 +307,20 @@ func deviceInit(args []string) error {
 		APIToken:      randomHex(24),
 		SigningPubKey: string(pub),
 		AgeIdentity:   identity,
+		// Devices download over HTTPS and hold no storage credentials.
 		Update: config.Update{
-			Enabled:      !*noUpdates,
-			Channel:      *channel,
-			ReportStatus: *report && !*noUpdates,
-			Endpoint:     p.Store.Endpoint,
-			Region:       p.Store.Region,
-			Bucket:       p.Store.Bucket,
-			Prefix:       p.Store.Prefix,
-			// Prefer separate credentials restricted to reading releases/ and
-			// channels/ (and writing status/) under the prefix.
-			AccessKey: firstNonEmpty(env("RAMEKIN_DEVICE_S3_ACCESS_KEY"), env(p.Store.AccessKeyEnv)),
-			SecretKey: firstNonEmpty(env("RAMEKIN_DEVICE_S3_SECRET_KEY"), env(p.Store.SecretKeyEnv)),
+			Enabled:   !*noUpdates,
+			Channel:   *channel,
+			StatusURL: *statusURL,
 		},
 		Container: config.Container{Hostname: name},
 		Health:    config.Health{HTTP: *healthHTTP, TCP: *healthTCP, Exec: execArgs},
 	}
-	if dev.Update.Enabled && (dev.Update.Endpoint == "" || dev.Update.Bucket == "") {
-		return errors.New("store.endpoint and store.bucket must be set in ramekin.yaml (or use --no-updates for a dev device)")
-	}
-	if dev.Update.Enabled && dev.Update.AccessKey == "" {
-		fmt.Fprintln(os.Stderr, "warning: no S3 credentials in RAMEKIN_DEVICE_S3_ACCESS_KEY/SECRET_KEY; the device will only work with a public-read bucket")
+	if dev.Update.Enabled {
+		if p.Releases.GitHub == "" {
+			return errors.New("releases.github must be set in ramekin.yaml (or use --no-updates for a dev device)")
+		}
+		dev.Update.URL = p.ChannelURL()
 	}
 	devJSON, err := json.MarshalIndent(dev, "", "  ")
 	if err != nil {
@@ -267,7 +334,7 @@ func deviceInit(args []string) error {
 		"Hostname":    name,
 		"Update":      map[string]any{"HTTPPassword": randomHex(16), "HTTPPort": dashboardPort},
 		"Environment": []string{"GOOS=linux", "GOARCH=" + arch},
-		"Packages":    []string{ramekindPkg},
+		"Packages":    []string{ramekindPkg, lockscreenPkg},
 		"PackageConfig": map[string]any{
 			ramekindPkg: map[string]any{
 				"ExtraFileContents": map[string]string{config.DefaultDevicePath: string(devJSON)},
@@ -538,15 +605,9 @@ func mergeGokrazy(cfgPath string, devJSON []byte, arch string) error {
 			}
 		}
 	}
-	pkgs, _ := cfg["Packages"].([]any)
-	found := false
-	for _, p := range pkgs {
-		if p == ramekindPkg {
-			found = true
-		}
-	}
-	if !found {
-		cfg["Packages"] = append(pkgs, ramekindPkg)
+	removed, added, err := enforcePackages(cfg)
+	if err != nil {
+		return fmt.Errorf("%s: %w", cfgPath, err)
 	}
 	pc, _ := cfg["PackageConfig"].(map[string]any)
 	if pc == nil {
@@ -580,7 +641,11 @@ func mergeGokrazy(cfgPath string, devJSON []byte, arch string) error {
 	if err := os.WriteFile(cfgPath+".bak", b, 0o600); err != nil {
 		return err
 	}
-	return os.WriteFile(cfgPath, append(out, '\n'), 0o600)
+	if err := os.WriteFile(cfgPath, append(out, '\n'), 0o600); err != nil {
+		return err
+	}
+	reportPackages(cfgPath, removed, added)
+	return nil
 }
 
 // deviceUpdate runs `gok update` for a gokrazy instance. If the instance is
@@ -608,6 +673,26 @@ func deviceUpdate(ctx context.Context, args []string) error {
 	var cfg map[string]any
 	if err := json.Unmarshal(orig, &cfg); err != nil {
 		return fmt.Errorf("%s: %w", cfgPath, err)
+	}
+	removed, added, err := enforcePackages(cfg)
+	if err != nil {
+		return fmt.Errorf("%s: %w", cfgPath, err)
+	}
+	if len(removed)+len(added) > 0 {
+		// Save the corrected config permanently (and back up the old one).
+		fixed, err := json.MarshalIndent(cfg, "", "    ")
+		if err != nil {
+			return err
+		}
+		fixed = append(fixed, '\n')
+		if err := os.WriteFile(cfgPath+".bak", orig, 0o600); err != nil {
+			return err
+		}
+		if err := os.WriteFile(cfgPath, fixed, 0o600); err != nil {
+			return err
+		}
+		reportPackages(cfgPath, removed, added)
+		orig = fixed
 	}
 	upd, _ := cfg["Update"].(map[string]any)
 	if upd == nil {

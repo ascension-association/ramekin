@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -35,10 +36,14 @@ type State struct {
 	// Trial is set while a new release is being health-checked. If the device
 	// reboots mid-trial, the next boot retries it (up to maxTrialAttempts).
 	Trial *Release `json:"trial,omitempty"`
-	// SeenSerial is the highest manifest serial acted upon; older or replayed
-	// manifests are ignored.
-	SeenSerial int64                 `json:"seen_serial"`
-	Bad        map[string]BadRelease `json:"bad,omitempty"` // by sha256
+	// SeenSerials is the highest manifest serial acted upon per channel;
+	// older or replayed manifests are ignored. Tracking each channel
+	// separately lets a device switch channels without missing a release.
+	SeenSerials map[string]int64 `json:"seen_serials,omitempty"`
+	// LegacySeenSerial is the single serial older agents kept for all
+	// channels; it is migrated on load.
+	LegacySeenSerial int64                 `json:"seen_serial,omitempty"`
+	Bad              map[string]BadRelease `json:"bad,omitempty"` // by sha256
 }
 
 func (s *State) clone() State {
@@ -46,6 +51,10 @@ func (s *State) clone() State {
 	c.Bad = make(map[string]BadRelease, len(s.Bad))
 	for k, v := range s.Bad {
 		c.Bad[k] = v
+	}
+	c.SeenSerials = make(map[string]int64, len(s.SeenSerials))
+	for k, v := range s.SeenSerials {
+		c.SeenSerials[k] = v
 	}
 	for _, r := range []**Release{&c.Current, &c.Previous, &c.Trial} {
 		if *r != nil {
@@ -65,7 +74,47 @@ func loadState(path string) (State, error) {
 	if err != nil {
 		return s, err
 	}
-	return s, json.Unmarshal(b, &s)
+	if err := json.Unmarshal(b, &s); err != nil {
+		return s, err
+	}
+	s.migrate()
+	return s, nil
+}
+
+// migrate moves an old agent's single serial to the channels its releases
+// came from, keeping their replay protection. (A dev push may be current
+// while the previous release came from a channel.)
+func (s *State) migrate() {
+	if s.LegacySeenSerial == 0 {
+		return
+	}
+	for _, r := range []*Release{s.Current, s.Previous, s.Trial} {
+		if r != nil {
+			s.markSeen(channelOf(*r), s.LegacySeenSerial)
+		}
+	}
+	s.LegacySeenSerial = 0
+}
+
+// markSeen raises a channel's serial and reports whether it changed.
+func (s *State) markSeen(channel string, serial int64) bool {
+	if channel == "" || serial <= s.SeenSerials[channel] {
+		return false
+	}
+	if s.SeenSerials == nil {
+		s.SeenSerials = map[string]int64{}
+	}
+	s.SeenSerials[channel] = serial
+	return true
+}
+
+// channelOf returns the channel a release came from, or "" for pushes.
+func channelOf(rel Release) string {
+	ch, _ := strings.CutPrefix(rel.Source, "channel:")
+	if ch == rel.Source {
+		return ""
+	}
+	return ch
 }
 
 // saveState writes atomically so a power cut never leaves a torn file.

@@ -21,7 +21,6 @@ import (
 	"github.com/ascension-association/ramekin/internal/container"
 	"github.com/ascension-association/ramekin/internal/keys"
 	"github.com/ascension-association/ramekin/internal/sifimg"
-	"github.com/ascension-association/ramekin/internal/store"
 )
 
 func main() {
@@ -85,20 +84,13 @@ func main() {
 
 	var upd *agent.Updater
 	if u := cfg.Update; u.Enabled {
-		st, err := store.New(store.Options{
-			Endpoint: u.Endpoint, Region: u.Region, Bucket: u.Bucket, Prefix: u.Prefix,
-			AccessKey: u.AccessKey, SecretKey: u.SecretKey,
-		})
-		if err != nil {
-			logger.Fatal(err)
-		}
 		id, err := age.ParseX25519Identity(cfg.AgeIdentity)
 		if err != nil {
 			logger.Fatalf("age_identity: %v", err)
 		}
 		upd = &agent.Updater{
-			Sup: sup, Store: st, Channel: u.Channel, Verifier: verifier, Identity: id,
-			Interval: time.Duration(u.Interval), Device: cfg.Name, Report: u.ReportStatus, Log: logger,
+			Sup: sup, URL: u.URL, Channel: u.Channel, Verifier: verifier, Identity: id,
+			Interval: time.Duration(u.Interval), Device: cfg.Name, StatusURL: u.StatusURL, Log: logger,
 		}
 	}
 

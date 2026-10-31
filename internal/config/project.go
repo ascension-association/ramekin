@@ -30,7 +30,7 @@ type Project struct {
 	Alerts   Alerts   `yaml:"alerts"`
 	Signing  Signing  `yaml:"signing"`
 	Encrypt  Encrypt  `yaml:"encryption"`
-	Store    Store    `yaml:"store"`
+	Releases Releases `yaml:"releases"`
 	Channels []string `yaml:"channels"`
 
 	// Dir is the directory containing ramekin.yaml. Not serialized.
@@ -71,15 +71,23 @@ type Encrypt struct {
 	RecipientsFile string   `yaml:"recipients_file"`
 }
 
-type Store struct {
-	Endpoint      string `yaml:"endpoint"`
-	Region        string `yaml:"region"`
-	Bucket        string `yaml:"bucket"`
-	Prefix        string `yaml:"prefix"`
-	AccessKeyEnv  string `yaml:"access_key_env"`
-	SecretKeyEnv  string `yaml:"secret_key_env"`
-	RetentionDays int    `yaml:"retention_days"`
-	RetentionMode string `yaml:"retention_mode"` // GOVERNANCE | COMPLIANCE
+// Releases is where `ramekin publish` puts releases: GitHub Releases of a
+// repository, with channel manifests on a branch of the same repository.
+type Releases struct {
+	// GitHub is the repository, as owner/name. It should be public: devices
+	// download anonymously (images are encrypted; names and sizes are not).
+	GitHub string `yaml:"github"`
+	// Branch holds the channel manifests, one file per channel.
+	Branch string `yaml:"branch"`
+	// TokenEnv names the environment variable with a GitHub token that can
+	// write the repository's contents and releases (default GITHUB_TOKEN;
+	// falls back to GH_TOKEN, then `gh auth token`).
+	TokenEnv string `yaml:"token_env"`
+}
+
+// ChannelURL is the directory devices fetch <channel>.json from.
+func (p *Project) ChannelURL() string {
+	return "https://raw.githubusercontent.com/" + p.Releases.GitHub + "/" + p.Releases.Branch + "/" + p.Name
 }
 
 func (p *Project) applyDefaults() {
@@ -123,21 +131,12 @@ func (p *Project) applyDefaults() {
 	if p.Encrypt.RecipientsFile == "" {
 		p.Encrypt.RecipientsFile = "keys/recipients.txt"
 	}
-	st := &p.Store
-	if st.Region == "" {
-		st.Region = "auto"
+	r := &p.Releases
+	if r.Branch == "" {
+		r.Branch = "ramekin-channels"
 	}
-	if st.Prefix == "" {
-		st.Prefix = p.Name
-	}
-	if st.AccessKeyEnv == "" {
-		st.AccessKeyEnv = "RAMEKIN_S3_ACCESS_KEY"
-	}
-	if st.SecretKeyEnv == "" {
-		st.SecretKeyEnv = "RAMEKIN_S3_SECRET_KEY"
-	}
-	if st.RetentionMode == "" {
-		st.RetentionMode = "GOVERNANCE"
+	if r.TokenEnv == "" {
+		r.TokenEnv = "GITHUB_TOKEN"
 	}
 	if len(p.Channels) == 0 {
 		p.Channels = []string{"stable"}
@@ -158,10 +157,8 @@ func (p *Project) validate() error {
 	default:
 		return fmt.Errorf("source.mode must be %q or %q", ModeDef, ModeOverlay)
 	}
-	switch strings.ToUpper(p.Store.RetentionMode) {
-	case "GOVERNANCE", "COMPLIANCE":
-	default:
-		return fmt.Errorf("store.retention_mode must be GOVERNANCE or COMPLIANCE")
+	if r := p.Releases.GitHub; r != "" && strings.Count(r, "/") != 1 {
+		return fmt.Errorf("releases.github must be owner/repo, got %q", r)
 	}
 	return nil
 }
@@ -220,6 +217,9 @@ func ParseProject(b []byte) (*Project, error) {
 			if strings.Contains(err.Error(), "field "+old+" not found") {
 				return nil, errContainerfile
 			}
+		}
+		if strings.Contains(err.Error(), "field store not found") {
+			return nil, errors.New("S3 storage was replaced by GitHub Releases: replace the store: section with releases: {github: owner/repo} (see \"Ship to a fleet of devices\" in the README)")
 		}
 		return nil, err
 	}

@@ -1,6 +1,6 @@
 // ramekin is the developer CLI: build a SIF from an Apptainer definition file or a
 // persistent overlay, scan it for CVEs, push it to a test device, and publish
-// it signed and encrypted to an object-locked bucket for the fleet.
+// it signed and encrypted to GitHub Releases for the fleet.
 package main
 
 import (
@@ -41,7 +41,6 @@ func init() {
 		{"promote", "<version> --channel C", "point a channel at an already-published version (also used to roll back)", cmdPromote},
 		{"releases", "", "list published releases and channels", cmdReleases},
 		{"watch", "[--interval D]", "rescan published releases against fresh CVE data and alert", cmdWatch},
-		{"fleet", "status", "show the status devices reported to the bucket", cmdFleet},
 	}
 }
 

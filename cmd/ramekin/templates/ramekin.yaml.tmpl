@@ -36,16 +36,16 @@ encryption:
   # the fleet key; `ramekin device init --own-key` adds per-device keys.
   recipients_file: keys/recipients.txt
 
-store:
-  # Sliplane Object Storage: create the bucket with versioning AND object
-  # locking enabled, then copy its endpoint URL from the Sliplane dashboard.
-  endpoint: ""
-  region: auto
-  bucket: ""
-  prefix: [[.Name]]
-  access_key_env: RAMEKIN_S3_ACCESS_KEY
-  secret_key_env: RAMEKIN_S3_SECRET_KEY
-  retention_days: 90
-  retention_mode: GOVERNANCE
+releases:
+  # GitHub repository for releases, as owner/repo. Devices download from it
+  # anonymously, so use a public repository (images are encrypted; their
+  # names and sizes are visible). Turn on immutable releases in its settings
+  # (Settings > General > Releases) so published releases can't be changed.
+  github: ""
+  # Branch holding the channel manifests devices poll (created on first publish).
+  branch: ramekin-channels
+  # Token that can write the repository's contents and releases. Falls back
+  # to GH_TOKEN, then `gh auth token`.
+  token_env: GITHUB_TOKEN
 
 channels: [stable]

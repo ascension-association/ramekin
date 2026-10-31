@@ -141,8 +141,7 @@ func (s *Supervisor) Install(ctx context.Context, src string, rel Release, force
 	defer s.mu.Unlock()
 	defer os.Remove(src)
 
-	if rel.Serial > s.state.SeenSerial {
-		s.state.SeenSerial = rel.Serial
+	if s.state.markSeen(channelOf(rel), rel.Serial) {
 		s.save()
 	}
 	if b, ok := s.state.Bad[rel.SHA256]; ok && !force {
@@ -208,12 +207,11 @@ func (s *Supervisor) Restart() {
 	}
 }
 
-// MarkSeen records that the manifest with this serial has been handled.
-func (s *Supervisor) MarkSeen(serial int64) {
+// MarkSeen records that a channel's manifest with this serial was handled.
+func (s *Supervisor) MarkSeen(channel string, serial int64) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
-	if serial > s.state.SeenSerial {
-		s.state.SeenSerial = serial
+	if s.state.markSeen(channel, serial) {
 		s.save()
 	}
 }
