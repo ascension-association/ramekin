@@ -8,6 +8,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"time"
 )
@@ -29,10 +30,19 @@ type BadRelease struct {
 	At      time.Time `json:"at"`
 }
 
+// KeepReleases is how many earlier successful releases a device keeps, so it
+// can switch back to any of them without downloading. With the current one,
+// that makes its three most recent successful releases.
+const KeepReleases = 2
+
 // State is persisted to <data_dir>/state.json after every transition.
 type State struct {
-	Current  *Release `json:"current,omitempty"`
-	Previous *Release `json:"previous,omitempty"`
+	Current *Release `json:"current,omitempty"`
+	// History holds earlier releases that passed their health check here,
+	// newest first (at most KeepReleases). Previous is History[0], kept as
+	// its own field for older readers of state.json and status reports.
+	History  []*Release `json:"history,omitempty"`
+	Previous *Release   `json:"previous,omitempty"`
 	// Trial is set while a new release is being health-checked. If the device
 	// reboots mid-trial, the next boot retries it (up to maxTrialAttempts).
 	Trial *Release `json:"trial,omitempty"`
@@ -62,7 +72,54 @@ func (s *State) clone() State {
 			*r = &cp
 		}
 	}
+	c.History = make([]*Release, len(s.History))
+	for i, r := range s.History {
+		cp := *r
+		c.History[i] = &cp
+	}
+	if len(c.History) > 0 {
+		c.Previous = c.History[0]
+	}
 	return c
+}
+
+// commit makes rel current, moving the release it replaces to the front of
+// History.
+func (s *State) commit(rel *Release) {
+	var h []*Release
+	if s.Current != nil && s.Current.SHA256 != rel.SHA256 {
+		h = append(h, s.Current)
+	}
+	for _, r := range s.History {
+		if r.SHA256 != rel.SHA256 && (s.Current == nil || r.SHA256 != s.Current.SHA256) {
+			h = append(h, r)
+		}
+	}
+	s.Current = rel
+	s.setHistory(h)
+}
+
+// forget removes a release from History.
+func (s *State) forget(sha string) {
+	s.setHistory(slices.DeleteFunc(slices.Clone(s.History), func(r *Release) bool { return r.SHA256 == sha }))
+}
+
+func (s *State) setHistory(h []*Release) {
+	s.History = h[:min(len(h), KeepReleases)]
+	s.Previous = nil
+	if len(s.History) > 0 {
+		s.Previous = s.History[0]
+	}
+}
+
+// release returns the History entry with sha, if any.
+func (s *State) release(sha string) *Release {
+	for _, r := range s.History {
+		if r.SHA256 == sha {
+			return r
+		}
+	}
+	return nil
 }
 
 func loadState(path string) (State, error) {
@@ -85,6 +142,10 @@ func loadState(path string) (State, error) {
 // came from, keeping their replay protection. (A dev push may be current
 // while the previous release came from a channel.)
 func (s *State) migrate() {
+	if len(s.History) == 0 && s.Previous != nil {
+		s.History = []*Release{s.Previous} // written by an agent that kept one
+	}
+	s.setHistory(s.History) // applies KeepReleases if it has shrunk
 	if s.LegacySeenSerial == 0 {
 		return
 	}

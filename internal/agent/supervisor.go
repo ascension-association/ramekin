@@ -24,6 +24,8 @@ type StartFunc func(image string) (Process, error)
 var (
 	ErrRolledBack = errors.New("new release failed and was rolled back")
 	ErrKnownBad   = errors.New("release previously failed on this device")
+	ErrNoPrevious = errors.New("no previous release to roll back to")
+	ErrNotKept    = errors.New("release is not among this device's earlier releases")
 )
 
 const maxTrialAttempts = 3
@@ -46,6 +48,20 @@ type Supervisor struct {
 	mu    sync.Mutex // serializes Boot/Install/Restart and guards state, run
 	state State
 	run   *runner
+
+	// snap is a copy of state taken at every save, so State never waits for
+	// a trial that holds mu.
+	smu  sync.Mutex
+	snap State
+	app  AppStatus
+}
+
+// AppStatus is whether the current release's container is up.
+type AppStatus struct {
+	Running  bool      `json:"running"`
+	Since    time.Time `json:"since,omitzero"` // when it last started or stopped
+	Restarts int       `json:"restarts"`       // exits since the release was started
+	LastExit string    `json:"last_exit,omitempty"`
 }
 
 func NewSupervisor(o SupervisorOptions) (*Supervisor, error) {
@@ -64,7 +80,7 @@ func NewSupervisor(o SupervisorOptions) (*Supervisor, error) {
 	if st.Bad == nil {
 		st.Bad = map[string]BadRelease{}
 	}
-	return &Supervisor{o: o, state: st}, nil
+	return &Supervisor{o: o, state: st, snap: st.clone()}, nil
 }
 
 func imagesDir(dataDir string) string { return filepath.Join(dataDir, "images") }
@@ -73,9 +89,22 @@ func imagesDir(dataDir string) string { return filepath.Join(dataDir, "images") 
 func TmpDir(dataDir string) string { return filepath.Join(dataDir, "tmp") }
 
 func (s *Supervisor) State() State {
-	s.mu.Lock()
-	defer s.mu.Unlock()
-	return s.state.clone()
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.snap.clone()
+}
+
+// App reports whether the container is running.
+func (s *Supervisor) App() AppStatus {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	return s.app
+}
+
+func (s *Supervisor) setApp(f func(*AppStatus)) {
+	s.smu.Lock()
+	defer s.smu.Unlock()
+	f(&s.app)
 }
 
 // Boot resumes after power-on: it finishes or abandons an interrupted trial,
@@ -86,6 +115,7 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 	defer s.mu.Unlock()
 	os.RemoveAll(TmpDir(s.o.DataDir))
 	os.MkdirAll(TmpDir(s.o.DataDir), 0o700)
+	s.gc() // drops images of releases no longer kept
 
 	if t := s.state.Trial; t != nil {
 		if t.Attempts >= maxTrialAttempts {
@@ -116,7 +146,8 @@ func (s *Supervisor) Boot(ctx context.Context) error {
 		prev := s.state.Previous
 		s.o.Log.Printf("current release %s failed at boot (%v); rolling back to %s", cur.Version, err, prev.Version)
 		s.markBad(cur, "failed health check at boot: "+err.Error())
-		s.state.Current, s.state.Previous = prev, nil
+		s.state.Current = prev
+		s.state.forget(prev.SHA256)
 		s.save()
 		cur = prev
 		proc, err = s.startHealthy(ctx, cur)
@@ -172,6 +203,7 @@ func (s *Supervisor) trial(ctx context.Context, rel *Release) error {
 	proc, err := s.startHealthy(ctx, rel)
 	if err != nil {
 		s.markBad(rel, err.Error())
+		s.state.forget(rel.SHA256) // a release switched back to no longer counts as good
 		s.state.Trial = nil
 		s.save()
 		s.gc()
@@ -181,18 +213,47 @@ func (s *Supervisor) trial(ctx context.Context, rel *Release) error {
 		}
 		return fmt.Errorf("%w: %s: %v", ErrRolledBack, rel.Version, err)
 	}
-	if s.state.Current != nil && s.state.Current.SHA256 != rel.SHA256 {
-		s.state.Previous = s.state.Current
-	}
 	rel.Attempts = 0
 	rel.InstalledAt = time.Now().UTC()
-	s.state.Current = rel
+	s.state.commit(rel)
 	s.state.Trial = nil
 	s.save()
 	s.gc()
 	s.o.Log.Printf("release %s is healthy and committed", rel.Version)
 	s.run = s.supervise(rel, proc)
 	return nil
+}
+
+// Rollback switches to the previous release.
+func (s *Supervisor) Rollback(ctx context.Context) error {
+	st := s.State()
+	if st.Previous == nil || st.Current == nil {
+		return ErrNoPrevious
+	}
+	return s.SwitchTo(ctx, st.Previous.SHA256)
+}
+
+// SwitchTo runs one of the device's earlier releases (History, by SHA-256)
+// on trial, as if it had just been installed. If it passes its health check,
+// it becomes current and the release it replaced moves to the front of
+// History; otherwise the current release keeps running and the failed one
+// is forgotten. A channel won't reinstall a newer release until it publishes
+// a new serial.
+func (s *Supervisor) SwitchTo(ctx context.Context, sha string) error {
+	ctx = context.WithoutCancel(ctx)
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	target := s.state.release(sha)
+	if target == nil || s.state.Current == nil {
+		return ErrNotKept
+	}
+	rel := *target
+	rel.Attempts = 1
+	trial := rel
+	s.state.Trial = &trial
+	s.save()
+	s.o.Log.Printf("switching from %s to %s", s.state.Current.Version, rel.Version)
+	return s.trial(ctx, &rel)
 }
 
 // Restart stops and restarts the current container.
@@ -251,6 +312,9 @@ func (s *Supervisor) markBad(rel *Release, reason string) {
 }
 
 func (s *Supervisor) save() {
+	s.smu.Lock()
+	s.snap = s.state.clone()
+	s.smu.Unlock()
 	if err := saveState(filepath.Join(s.o.DataDir, "state.json"), s.state); err != nil {
 		s.o.Log.Printf("saving state: %v", err)
 	}
@@ -260,10 +324,10 @@ func (s *Supervisor) save() {
 	}
 }
 
-// gc deletes images that are neither current, previous, nor on trial.
+// gc deletes images that are neither current, kept in History, nor on trial.
 func (s *Supervisor) gc() {
 	keep := map[string]bool{}
-	for _, r := range []*Release{s.state.Current, s.state.Previous, s.state.Trial} {
+	for _, r := range append([]*Release{s.state.Current, s.state.Trial}, s.state.History...) {
 		if r != nil {
 			keep[r.SHA256+".sif"] = true
 		}
@@ -289,25 +353,34 @@ func (s *Supervisor) supervise(rel *Release, proc Process) *runner {
 	if base == 0 {
 		base = 2 * time.Second
 	}
+	s.setApp(func(a *AppStatus) { *a = AppStatus{} })
 	go func() {
 		defer close(r.done)
+		defer s.setApp(func(a *AppStatus) { a.Running, a.Since = false, time.Now().UTC() })
 		delay := base
 		for {
 			if proc == nil {
 				p, err := s.o.Start(rel.Path)
 				if err != nil {
 					s.o.Log.Printf("start %s: %v", rel.Version, err)
+					s.setApp(func(a *AppStatus) { a.LastExit = "start: " + err.Error() })
 				}
 				proc = p
 			}
 			started := time.Now()
 			if proc != nil {
+				s.setApp(func(a *AppStatus) { a.Running, a.Since = true, started.UTC() })
 				select {
 				case <-ctx.Done():
 					proc.Stop(s.o.StopTimeout)
 					return
 				case <-proc.Done():
 					s.o.Log.Printf("container %s exited: %v", rel.Version, proc.Err())
+					s.setApp(func(a *AppStatus) {
+						a.Running, a.Since = false, time.Now().UTC()
+						a.Restarts++
+						a.LastExit = fmt.Sprint(proc.Err())
+					})
 				}
 				proc = nil
 			}

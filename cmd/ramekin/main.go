@@ -37,6 +37,7 @@ func init() {
 		{"logs", "<device> [-f]", "show a device's container and agent logs", cmdLogs},
 		{"status", "<device>", "show what a device is running", cmdStatus},
 		{"restart", "<device>", "restart a device's container", cmdRestart},
+		{"rollback", "<device> [version]", "switch a device to its previous (or an earlier kept) release, health-checked first", cmdRollback},
 		{"publish", "--version V [--channel C]", "scan, sign, encrypt and upload a release, then update a channel", cmdPublish},
 		{"promote", "<version> --channel C", "point a channel at an already-published version (also used to roll back)", cmdPromote},
 		{"releases", "", "list published releases and channels", cmdReleases},
@@ -45,10 +46,11 @@ func init() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: ramekin <command> [arguments]\n\ncommands:")
+	fmt.Fprintln(os.Stderr, "usage: ramekin <command> [arguments]\n       ramekin --gui [--listen ADDR] [--no-open]\n\ncommands:")
 	for _, c := range commands {
 		fmt.Fprintf(os.Stderr, "  %-9s %-28s %s\n", c.name, c.args, c.summary)
 	}
+	fmt.Fprintf(os.Stderr, "\n  --gui     open a web console showing the fleet's health and resource use,\n            with rollback (devices in .ramekin/devices; listens on 127.0.0.1:8099)\n")
 }
 
 func main() {
@@ -58,6 +60,9 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
+	if os.Args[1] == "--gui" {
+		commands = append(commands, command{name: "--gui", run: cmdGUI})
+	}
 	for _, c := range commands {
 		if c.name == os.Args[1] {
 			err := c.run(ctx, os.Args[2:])

@@ -5,19 +5,18 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"runtime"
 	"strings"
-	"time"
 )
 
 // API is the device's authenticated HTTP API, used by `ramekin push`,
 // `ramekin logs` and `ramekin status`.
 type API struct {
-	Sup    *Supervisor
-	Upd    *Updater // nil when channel updates are disabled
-	Logs   *LogBuffer
-	Token  string
-	Device string
+	Sup     *Supervisor
+	Upd     *Updater // nil when channel updates are disabled
+	Logs    *LogBuffer
+	Metrics *Sampler // optional
+	Token   string
+	Device  string
 }
 
 type PushResult struct {
@@ -32,6 +31,8 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/status", a.status)
 	mux.HandleFunc("PUT /v1/image", a.push)
 	mux.HandleFunc("GET /v1/logs", a.logs)
+	mux.HandleFunc("POST /v1/rollback", a.rollback)
+	mux.HandleFunc("POST /v1/switch", a.rollback)
 	mux.HandleFunc("POST /v1/restart", func(w http.ResponseWriter, r *http.Request) {
 		a.Sup.Restart()
 		w.WriteHeader(http.StatusNoContent)
@@ -63,14 +64,35 @@ func (a *API) auth(next http.Handler) http.Handler {
 }
 
 func (a *API) status(w http.ResponseWriter, r *http.Request) {
-	var v any
 	if a.Upd != nil {
-		v = a.Upd.Status()
-	} else {
-		st := a.Sup.State()
-		v = DeviceStatus{Device: a.Device, Arch: runtime.GOARCH, Current: st.Current, Previous: st.Previous, BadCount: len(st.Bad), Reported: time.Now().UTC()}
+		writeJSON(w, http.StatusOK, a.Upd.Status())
+		return
 	}
-	writeJSON(w, http.StatusOK, v)
+	writeJSON(w, http.StatusOK, NewStatus(a.Device, a.Sup, a.Metrics))
+}
+
+// rollback runs an earlier release on trial: the previous one, or for
+// /v1/switch the one given by ?sha= (or the newest kept with ?version=).
+// It answers like push.
+func (a *API) rollback(w http.ResponseWriter, r *http.Request) {
+	var err error
+	if r.URL.Path == "/v1/switch" {
+		err = a.Sup.SwitchTo(r.Context(), a.findKept(r.URL.Query().Get("sha"), r.URL.Query().Get("version")))
+	} else {
+		err = a.Sup.Rollback(r.Context())
+	}
+	res := PushResult{OK: err == nil, RolledBack: errors.Is(err, ErrRolledBack), State: a.Sup.State()}
+	code := http.StatusOK
+	switch {
+	case errors.Is(err, ErrNoPrevious), errors.Is(err, ErrNotKept):
+		code = http.StatusConflict
+	case err != nil:
+		code = http.StatusUnprocessableEntity
+	}
+	if err != nil {
+		res.Error = err.Error()
+	}
+	writeJSON(w, code, res)
 }
 
 func (a *API) push(w http.ResponseWriter, r *http.Request) {
@@ -117,6 +139,16 @@ func (a *API) logs(w http.ResponseWriter, r *http.Request) {
 			}
 		}
 	}
+}
+
+// findKept returns the SHA-256 of the kept release matching sha or version.
+func (a *API) findKept(sha, version string) string {
+	for _, r := range a.Sup.State().History {
+		if r.SHA256 == sha || (sha == "" && version != "" && r.Version == version) {
+			return r.SHA256
+		}
+	}
+	return ""
 }
 
 func writeJSON(w http.ResponseWriter, code int, v any) {

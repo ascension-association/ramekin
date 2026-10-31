@@ -82,6 +82,9 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGTERM, syscall.SIGINT)
 	defer stop()
 
+	metrics := &agent.Sampler{Disk: cfg.DataDir}
+	go metrics.Run(ctx, 5*time.Second)
+
 	var upd *agent.Updater
 	if u := cfg.Update; u.Enabled {
 		id, err := age.ParseX25519Identity(cfg.AgeIdentity)
@@ -90,11 +93,11 @@ func main() {
 		}
 		upd = &agent.Updater{
 			Sup: sup, URL: u.URL, Channel: u.Channel, Verifier: verifier, Identity: id,
-			Interval: time.Duration(u.Interval), Device: cfg.Name, StatusURL: u.StatusURL, Log: logger,
+			Interval: time.Duration(u.Interval), Device: cfg.Name, StatusURL: u.StatusURL, Metrics: metrics, Log: logger,
 		}
 	}
 
-	api := &agent.API{Sup: sup, Upd: upd, Logs: logs, Token: cfg.APIToken, Device: cfg.Name}
+	api := &agent.API{Sup: sup, Upd: upd, Logs: logs, Metrics: metrics, Token: cfg.APIToken, Device: cfg.Name}
 	srv := &http.Server{Addr: cfg.Listen, Handler: api.Handler(), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		if err := srv.ListenAndServe(); err != nil && err != http.ErrServerClosed {

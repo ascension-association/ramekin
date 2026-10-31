@@ -37,7 +37,8 @@ type Updater struct {
 	Identity  age.Identity
 	Interval  time.Duration
 	Device    string
-	StatusURL string // optional: POSTed a DeviceStatus after every check
+	StatusURL string   // optional: POSTed a DeviceStatus after every check
+	Metrics   *Sampler // optional: resource use included in status reports
 	Log       *log.Logger
 
 	mu      sync.Mutex
@@ -192,26 +193,37 @@ func receive(r io.Reader, dir string, limit int64) (path, sum string, n int64, e
 
 // DeviceStatus is what a device reports (API /v1/status and update.status_url).
 type DeviceStatus struct {
-	Device    string    `json:"device"`
-	Arch      string    `json:"arch"`
-	Channel   string    `json:"channel"`
-	Current   *Release  `json:"current,omitempty"`
-	Previous  *Release  `json:"previous,omitempty"`
-	BadCount  int       `json:"bad_count"`
-	LastCheck time.Time `json:"last_check,omitzero"`
-	LastError string    `json:"last_error,omitempty"`
-	Reported  time.Time `json:"reported"`
+	Device    string     `json:"device"`
+	Arch      string     `json:"arch"`
+	Channel   string     `json:"channel"`
+	Current   *Release   `json:"current,omitempty"`
+	Previous  *Release   `json:"previous,omitempty"`
+	History   []*Release `json:"history,omitempty"` // earlier releases it can switch to, newest first
+	Trial     *Release   `json:"trial,omitempty"`   // being health-checked right now
+	App       AppStatus  `json:"app"`
+	BadCount  int        `json:"bad_count"`
+	LastCheck time.Time  `json:"last_check,omitzero"`
+	LastError string     `json:"last_error,omitempty"`
+	Metrics   *Metrics   `json:"metrics,omitempty"`
+	Reported  time.Time  `json:"reported"`
+}
+
+// NewStatus reports a supervisor's releases, app and resource use.
+func NewStatus(device string, sup *Supervisor, m *Sampler) DeviceStatus {
+	st := sup.State()
+	return DeviceStatus{
+		Device: device, Arch: runtime.GOARCH,
+		Current: st.Current, Previous: st.Previous, History: st.History, Trial: st.Trial, App: sup.App(),
+		BadCount: len(st.Bad), Metrics: m.Snapshot(), Reported: time.Now().UTC(),
+	}
 }
 
 func (u *Updater) Status() DeviceStatus {
-	st := u.Sup.State()
+	s := NewStatus(u.Device, u.Sup, u.Metrics)
 	u.mu.Lock()
 	defer u.mu.Unlock()
-	return DeviceStatus{
-		Device: u.Device, Arch: runtime.GOARCH, Channel: u.Channel,
-		Current: st.Current, Previous: st.Previous, BadCount: len(st.Bad),
-		LastCheck: u.checked, LastError: u.lastErr, Reported: time.Now().UTC(),
-	}
+	s.Channel, s.LastCheck, s.LastError = u.Channel, u.checked, u.lastErr
+	return s
 }
 
 // ReportStatus POSTs the device's status to StatusURL, if configured.

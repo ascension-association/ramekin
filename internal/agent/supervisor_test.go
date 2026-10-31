@@ -7,6 +7,7 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -25,6 +26,13 @@ func (p *fakeProc) Stop(time.Duration)    { p.once.Do(func() { close(p.done) }) 
 type fakeRuntime struct {
 	mu      sync.Mutex
 	started []string // image contents, in start order
+	procs   []*fakeProc
+}
+
+func (r *fakeRuntime) lastProc() *fakeProc {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.procs[len(r.procs)-1]
 }
 
 func (r *fakeRuntime) start(image string) (Process, error) {
@@ -32,10 +40,11 @@ func (r *fakeRuntime) start(image string) (Process, error) {
 	if err != nil {
 		return nil, err
 	}
+	p := &fakeProc{done: make(chan struct{})}
 	r.mu.Lock()
 	r.started = append(r.started, string(b))
+	r.procs = append(r.procs, p)
 	r.mu.Unlock()
-	p := &fakeProc{done: make(chan struct{})}
 	if string(b) == "crash" {
 		p.Stop(0)
 	}
@@ -210,5 +219,152 @@ func waitFor(t *testing.T, cond func() bool) {
 			t.Fatal("condition not met")
 		}
 		time.Sleep(5 * time.Millisecond)
+	}
+}
+
+func TestRollback(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	rt := &fakeRuntime{}
+	s := newSup(t, dir, rt)
+	if err := s.Rollback(ctx); !errors.Is(err, ErrNoPrevious) {
+		t.Fatalf("want ErrNoPrevious, got %v", err)
+	}
+	s.Install(ctx, stage(t, dir, "v1"), Release{Version: "v1", SHA256: "s1"}, false)
+	s.Install(ctx, stage(t, dir, "v2"), Release{Version: "v2", SHA256: "s2", Serial: 7, Source: "channel:stable"}, false)
+	if err := s.Rollback(ctx); err != nil {
+		t.Fatal(err)
+	}
+	st := s.State()
+	if st.Current.Version != "v1" || st.Previous.Version != "v2" || st.Trial != nil || st.SeenSerials["stable"] != 7 {
+		t.Fatalf("after rollback: %+v", st)
+	}
+	waitFor(t, func() bool { return rt.last() == "v1" && s.App().Running })
+	// Rolling back again returns to v2: the two releases swap.
+	if err := s.Rollback(ctx); err != nil || s.State().Current.Version != "v2" {
+		t.Fatalf("second rollback: %v %+v", err, s.State())
+	}
+
+	// A previous release that no longer starts is rejected, and the current one keeps running.
+	os.WriteFile(s.State().Previous.Path, []byte("crash"), 0o600)
+	if err := s.Rollback(ctx); !errors.Is(err, ErrRolledBack) {
+		t.Fatalf("want ErrRolledBack, got %v", err)
+	}
+	if st := s.State(); st.Current.Version != "v2" || st.Trial != nil {
+		t.Fatalf("failed rollback changed releases: %+v", st)
+	}
+	waitFor(t, func() bool { return rt.last() == "v2" })
+}
+
+func TestStateDuringTrial(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	rt := &fakeRuntime{}
+	s := newSup(t, dir, rt)
+	s.o.Health.Grace = 300 * time.Millisecond
+	done := make(chan error)
+	go func() { done <- s.Install(ctx, stage(t, dir, "v1"), Release{Version: "v1", SHA256: "s1"}, false) }()
+	// State and App answer while the trial holds the supervisor's lock.
+	waitFor(t, func() bool { return s.State().Trial != nil })
+	if s.App().Running {
+		t.Fatal("app reported running before its trial passed")
+	}
+	if err := <-done; err != nil {
+		t.Fatal(err)
+	}
+	waitFor(t, func() bool { a := s.App(); return a.Running && a.Restarts == 0 })
+}
+
+func TestAppStatusCountsExits(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	rt := &fakeRuntime{}
+	s := newSup(t, dir, rt)
+	s.o.RestartDelay = time.Millisecond
+	s.Install(ctx, stage(t, dir, "v1"), Release{Version: "v1", SHA256: "s1"}, false)
+	waitFor(t, func() bool { return s.App().Running })
+	rt.lastProc().Stop(0) // the container exits on its own
+	waitFor(t, func() bool { a := s.App(); return a.Restarts == 1 && a.Running && a.LastExit == "exit status 1" })
+}
+
+func TestSwitchToKeptRelease(t *testing.T) {
+	ctx := context.Background()
+	dir := t.TempDir()
+	rt := &fakeRuntime{}
+	s := newSup(t, dir, rt)
+	for _, v := range []string{"v1", "v2", "v3", "v4", "v5"} {
+		if err := s.Install(ctx, stage(t, dir, v), Release{Version: v, SHA256: "s" + v}, false); err != nil {
+			t.Fatal(err)
+		}
+	}
+	versions := func() (out []string) {
+		st := s.State()
+		out = append(out, st.Current.Version)
+		for _, r := range st.History {
+			out = append(out, r.Version)
+		}
+		return out
+	}
+	// The three most recent successful releases: the current one and two more.
+	if got := strings.Join(versions(), " "); got != "v5 v4 v3" {
+		t.Fatalf("kept %s", got)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(dir, "images")); len(ents) != 3 {
+		t.Fatalf("want 3 images kept, got %d", len(ents))
+	}
+	if err := s.SwitchTo(ctx, "sv2"); !errors.Is(err, ErrNotKept) {
+		t.Fatalf("switched to a forgotten release: %v", err)
+	}
+	// Switching to the oldest kept release puts the current one at the front.
+	if err := s.SwitchTo(ctx, "sv3"); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Join(versions(), " "); got != "v3 v5 v4" || s.State().Previous.Version != "v5" {
+		t.Fatalf("after switch: %s", got)
+	}
+	waitFor(t, func() bool { return rt.last() == "v3" })
+
+	// A kept release that fails its health check is dropped from History.
+	os.WriteFile(filepath.Join(dir, "images", "sv4.sif"), []byte("crash"), 0o600)
+	if err := s.SwitchTo(ctx, "sv4"); !errors.Is(err, ErrRolledBack) {
+		t.Fatalf("want ErrRolledBack, got %v", err)
+	}
+	if got := strings.Join(versions(), " "); got != "v3 v5" {
+		t.Fatalf("after failed switch: %s", got)
+	}
+}
+
+func TestHistoryMigratesFromPrevious(t *testing.T) {
+	dir := t.TempDir()
+	saveState(filepath.Join(dir, "state.json"), State{
+		Current:  &Release{Version: "v2", SHA256: "s2"},
+		Previous: &Release{Version: "v1", SHA256: "s1"},
+	})
+	st, err := loadState(filepath.Join(dir, "state.json"))
+	if err != nil || len(st.History) != 1 || st.History[0].Version != "v1" {
+		t.Fatalf("got %+v %v", st.History, err)
+	}
+}
+
+func TestBootTrimsHistory(t *testing.T) {
+	dir := t.TempDir()
+	os.MkdirAll(filepath.Join(dir, "images"), 0o700)
+	var hist []*Release
+	for _, v := range []string{"v1", "v2", "v3", "v4"} {
+		p := filepath.Join(dir, "images", "s"+v+".sif")
+		os.WriteFile(p, []byte(v), 0o600)
+		hist = append([]*Release{{Version: v, SHA256: "s" + v, Path: p}}, hist...)
+	}
+	// Written by an agent that kept three earlier releases.
+	saveState(filepath.Join(dir, "state.json"), State{Current: hist[0], History: hist[1:]})
+	s := newSup(t, dir, &fakeRuntime{})
+	if err := s.Boot(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if h := s.State().History; len(h) != KeepReleases || h[1].Version != "v2" {
+		t.Fatalf("history %+v", h)
+	}
+	if ents, _ := os.ReadDir(filepath.Join(dir, "images")); len(ents) != KeepReleases+1 {
+		t.Fatalf("want %d images, got %d", KeepReleases+1, len(ents))
 	}
 }
