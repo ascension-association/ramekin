@@ -232,13 +232,15 @@ func (d *deviceRecord) do(ctx context.Context, method, path string, body io.Read
 
 func cmdDevice(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ramekin device init|claim|set|update|find|list ...")
+		return errors.New("usage: ramekin device init|claim|release|set|update|find|list ...")
 	}
 	switch args[0] {
 	case "init":
 		return deviceInit(args[1:])
 	case "claim":
 		return deviceClaim(ctx, args[1:])
+	case "release":
+		return deviceRelease(ctx, args[1:])
 	case "set":
 		return deviceSet(ctx, args[1:])
 	case "update":

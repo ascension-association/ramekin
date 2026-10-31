@@ -252,3 +252,25 @@ func TestFirmwareFromChannel(t *testing.T) {
 		t.Fatalf("reinstalled a failed version: %v %v", err, g.calls)
 	}
 }
+
+func TestOfficialFirmwareIsPlain(t *testing.T) {
+	h := newChannelHost(t)
+	g := &fakeGokrazy{}
+	f := newFirmware(t, g, "1", bootedFrom(t, "2", "2"), nil)
+	f.URL, f.Verifier = h.srv.URL+"/fw", h.signer // no age identity: not claimed
+	var parts []manifest.Part
+	for _, name := range []string{"boot", "root"} {
+		content := name + " of 2"
+		h.files["/blob/"+name] = []byte(content)
+		sum := sha256.Sum256([]byte(content))
+		parts = append(parts, manifest.Part{Name: name, Object: "../blob/" + name, SHA256: hex.EncodeToString(sum[:]), Size: int64(len(content))})
+	}
+	env, _ := manifest.Sign(&manifest.Manifest{Name: "r76s", Version: "2", Serial: 1, Arch: runtime.GOARCH, Kind: "firmware", Plain: true, Parts: parts}, h.signer)
+	h.files["/fw/stable.json"] = env
+	if err := f.Check(context.Background()); err != nil {
+		t.Fatal(err)
+	}
+	if g.written["root"] != "root of 2" || g.written["bootonly"] != "boot of 2" {
+		t.Fatalf("wrote %v", g.written)
+	}
+}

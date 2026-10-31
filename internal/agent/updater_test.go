@@ -37,6 +37,11 @@ type channelHost struct {
 	serials int64
 }
 
+func (h *channelHost) signerPublic() crypto.PublicKey {
+	pk, _ := h.signer.PublicKey()
+	return pk
+}
+
 func newChannelHost(t *testing.T) *channelHost {
 	k, _ := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	sv, _ := signature.LoadECDSASignerVerifier(k, crypto.SHA256)

@@ -52,12 +52,58 @@ type Firmware struct {
 	// Version is the firmware version this image was built as.
 	Version string `json:"version,omitempty"`
 	// URL is the directory of firmware channel manifests; empty disables
-	// firmware updates. It follows Update.Channel and Update.Interval.
+	// firmware updates.
 	URL string `json:"url,omitempty"`
+	// Channel defaults to Update.Channel, or "stable".
+	Channel string `json:"channel,omitempty"`
+	// SigningPubKey (PEM) verifies firmware. Official firmware, built for a
+	// board rather than a project, is signed with its own key; empty means
+	// the project's key (SigningPubKey of the device).
+	SigningPubKey string `json:"signing_pubkey,omitempty"`
 }
 
 // Fleet reports whether this is a fleet image, whose devices are claimed.
 func (d *Device) Fleet() bool { return d.APIToken == "" }
+
+// Official reports whether this is official firmware for a board: an image
+// with no project, whose devices learn their project when claimed.
+func (d *Device) Official() bool { return d.SigningPubKey == "" && d.Firmware.SigningPubKey != "" }
+
+// FirmwareChannel is the firmware channel the device follows.
+func (d *Device) FirmwareChannel() string {
+	if d.Firmware.Channel != "" {
+		return d.Firmware.Channel
+	}
+	if d.Update.Channel != "" {
+		return d.Update.Channel
+	}
+	return "stable"
+}
+
+// Settings are what a project decides about its devices: the key its apps
+// are signed with, where they come from, and how they run. Official
+// firmware has none, so a device gets them when it's claimed and keeps them
+// on /perm; a device on an image built for its project keeps a copy of the
+// image's.
+type Settings struct {
+	SigningPubKey string    `json:"signing_pubkey"`
+	Update        Update    `json:"update,omitempty"`
+	Container     Container `json:"container,omitempty"`
+	Health        Health    `json:"health,omitempty"`
+}
+
+// Settings returns the device's project settings.
+func (d *Device) Settings() Settings {
+	return Settings{SigningPubKey: d.SigningPubKey, Update: d.Update, Container: d.Container, Health: d.Health}
+}
+
+// Apply sets the device's project settings, then fills in defaults and
+// checks the result.
+func (d *Device) Apply(s Settings) error {
+	d.SigningPubKey, d.Update, d.Container, d.Health = s.SigningPubKey, s.Update, s.Container, s.Health
+	d.applyDefaults()
+	return d.validate()
+}
 
 type Container struct {
 	Hostname string            `json:"hostname,omitempty"`
@@ -120,7 +166,7 @@ func (d *Device) applyDefaults() {
 }
 
 func (d *Device) validate() error {
-	if d.SigningPubKey == "" {
+	if d.SigningPubKey == "" && d.Firmware.SigningPubKey == "" {
 		return errors.New("signing_pubkey is required: unsigned images are never run")
 	}
 	if d.Update.Enabled {
@@ -140,6 +186,22 @@ func (d *Device) validate() error {
 		}
 	}
 	return nil
+}
+
+// LoadSettings reads settings saved on the device; nil if there are none.
+func LoadSettings(path string) (*Settings, error) {
+	b, err := os.ReadFile(path)
+	if errors.Is(err, os.ErrNotExist) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	var s Settings
+	if err := json.Unmarshal(b, &s); err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return &s, nil
 }
 
 func LoadDevice(path string) (*Device, error) {

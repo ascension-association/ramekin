@@ -577,6 +577,51 @@ gokrazy's own A/B root partitions cover OS and agent updates. For one device on 
 </details>
 
 <details>
+<summary><strong>Official firmware for your board</strong></summary>
+
+The easiest way to run a fleet is **official firmware**: a ready-made image for a board, with gokrazy, the kernel and ramekind, and no project of its own. Anyone can flash it. Devices learn your project when you claim them, and keep following the board's firmware channel for OS updates.
+
+| Board | Repository |
+|---|---|
+| FriendlyElec NanoPi R76S | [firmware.r76s](https://github.com/ascension-association/firmware.r76s) |
+
+Point your project at it in `ramekin.yaml`:
+
+```yaml
+firmware:
+  github: ascension-association/firmware.r76s
+  board: r76s
+```
+
+Flash a device with the image from the firmware's latest release, boot it, and claim it with the pairing code shown on its screen:
+
+```sh
+ramekin device claim kitchen-01 192.168.1.40 --health-http http://127.0.0.1/
+```
+
+The claim gives the device your project's signing key, app channel and app settings, which it keeps on `/perm`. It then installs your app from your channel.
+- **Changing settings:** `ramekin device set kitchen-01 …` changes them over the device's API, signed with the project key.
+- **Handing a device over:** `ramekin device release kitchen-01` factory-resets it, for another project or a fresh claim. It erases the device's identity, settings, apps and app data, keeps its firmware, and restarts unclaimed.
+
+**Two kinds of trust:**
+- **Firmware:** official firmware is signed with the firmware repository's key (`keys/firmware-sign.pub`). It isn't encrypted, because it contains no secrets.
+- **Apps:** they're signed with your project's key. The device takes that key from the claim, and the pairing code shows the claim comes from someone with the device in hand.
+- **No gokrazy password:** official images have none, so gokrazy's web interface is reachable only from the device itself. A password in a public image would be public. So `ramekin device update` doesn't apply to these devices: their OS comes from the firmware channel.
+
+**Moving devices built for your project over:** a device on your own fleet image trusts only your project's key for firmware. Point `ramekin.yaml` at the official firmware, then push one image built from your fleet image (`ramekin firmware push <device>`). That image follows the official channel and trusts its key, and the device moves to the official firmware on its own.
+
+**Publishing official firmware** (for maintainers of a board's firmware repository, in its checkout):
+
+```sh
+ramekin firmware init --board r76s --github ascension-association/firmware.r76s --from <gokrazy instance for the board>
+ramekin firmware publish --version 1.0.0
+```
+
+`init` writes `firmware.yaml`, creates the firmware signing key, and sets up the gokrazy instance (`~/gokrazy/firmware.r76s`). Commit `firmware.yaml` and `keys/firmware-sign.pub`. Keep `keys/firmware-sign.key` secret and backed up: without it, no more firmware can be published for those devices.
+
+</details>
+
+<details>
 <summary><strong>Fleet image, claiming and firmware updates</strong></summary>
 
 `device init` builds an OS image for one board, with that device's name, API token and keys inside it. For a fleet, build one **fleet image** instead. Each device keeps its own identity on its data partition (`/perm`), so the same image, and the same firmware updates, serve every device of a kind.
@@ -592,6 +637,7 @@ ramekin device claim kitchen-01 192.168.1.40  # asks for the pairing code shown 
 - **`device claim`:** with the right code, the workstation signs an identity record with the project key. The record binds the device's name to its public keys and to the board's hardware serial (from the device tree on the Pi and Rockchip boards, or DMI on PCs). The device stores the record, an API token and its own gokrazy password, then restarts as that device.
 - **Encryption:** the device's age key is added to `keys/recipients.txt`, so later releases are encrypted to it.
 - **Boards built with `device init`:** claim them with their existing token, and no code is needed. They keep their token and gokrazy password.
+- **Official firmware:** see the section above. Claiming works the same way, and the claim also carries the project's settings.
 
 **Identity checks.**
 - **On the device:** ramekind checks its identity record at every start against the project key, its own keys and the hardware serial. An edited record, or one copied from another device or onto another board, is refused, and the device is treated as unclaimed.

@@ -11,9 +11,11 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/sigstore/sigstore/pkg/signature"
 
+	"github.com/ascension-association/ramekin/internal/config"
 	"github.com/ascension-association/ramekin/internal/identity"
 	"github.com/ascension-association/ramekin/internal/manifest"
 )
@@ -37,6 +39,29 @@ type API struct {
 	// disables them.
 	Firmware *Firmware
 	Verifier signature.Verifier
+	// Settings serves the project settings; nil disables /v1/settings.
+	Settings *SettingsStore
+	// Release serves DELETE /v1/claim; nil disables it.
+	Release *Releaser
+}
+
+// SettingsStore holds a device's project settings. On official firmware they
+// live on the device and can be changed over the API; otherwise they come
+// from the image and change with it.
+type SettingsStore struct {
+	Current    config.Settings
+	FromDevice bool
+	// Verifier checks new settings: the project's key, not the firmware's.
+	Verifier signature.Verifier
+	Save     func(config.Settings) error
+	Restart  func()
+}
+
+// SettingsInfo is the answer to GET /v1/settings.
+type SettingsInfo struct {
+	Settings config.Settings `json:"settings"`
+	// Source is "device" (changeable with PUT /v1/settings) or "image".
+	Source string `json:"source"`
 }
 
 type PushResult struct {
@@ -49,6 +74,9 @@ type PushResult struct {
 func (a *API) Handler() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("PUT /v1/firmware", a.pushFirmware)
+	mux.HandleFunc("GET /v1/settings", a.getSettings)
+	mux.HandleFunc("DELETE /v1/claim", func(w http.ResponseWriter, r *http.Request) { a.Release.release(w, r) })
+	mux.HandleFunc("PUT /v1/settings", a.putSettings)
 	mux.HandleFunc("GET /v1/status", a.status)
 	mux.HandleFunc("PUT /v1/image", a.push)
 	mux.HandleFunc("GET /v1/logs", a.logs)
@@ -107,6 +135,56 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 	}
 	s.Nonce = r.URL.Query().Get("nonce")
 	a.writeJSON(w, http.StatusOK, s)
+}
+
+func (a *API) getSettings(w http.ResponseWriter, r *http.Request) {
+	if a.Settings == nil {
+		http.Error(w, "not supported", http.StatusNotImplemented)
+		return
+	}
+	src := "image"
+	if a.Settings.FromDevice {
+		src = "device"
+	}
+	a.writeJSON(w, http.StatusOK, SettingsInfo{Settings: a.Settings.Current, Source: src})
+}
+
+// putSettings replaces the project settings of a device on official
+// firmware. Besides the API token, the new settings must be signed with the
+// project's current key (they may name a new one), then ramekind restarts.
+func (a *API) putSettings(w http.ResponseWriter, r *http.Request) {
+	if a.Settings == nil || !a.Settings.FromDevice {
+		http.Error(w, "this device's settings come from its image; change them with `ramekin device set` and a firmware update", http.StatusConflict)
+		return
+	}
+	b, err := io.ReadAll(io.LimitReader(r.Body, 1<<20))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	var s config.Settings
+	if a.Settings.Verifier == nil {
+		http.Error(w, "this device isn't claimed", http.StatusConflict)
+		return
+	}
+	if err := manifest.OpenInto(b, a.Settings.Verifier, &s); err != nil {
+		http.Error(w, "settings "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	dev := config.Device{}
+	if err := dev.Apply(s); err != nil {
+		http.Error(w, "settings: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := a.Settings.Save(s); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, SettingsInfo{Settings: s, Source: "device"})
+	go func() {
+		time.Sleep(time.Second)
+		a.Settings.Restart()
+	}()
 }
 
 // pushFirmware installs a firmware image sent as a tar of manifest.json (a

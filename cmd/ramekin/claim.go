@@ -15,7 +15,10 @@ import (
 	"strings"
 	"time"
 
+	"filippo.io/age"
+
 	"github.com/ascension-association/ramekin/internal/agent"
+	"github.com/ascension-association/ramekin/internal/config"
 	"github.com/ascension-association/ramekin/internal/identity"
 	"github.com/ascension-association/ramekin/internal/keys"
 	"github.com/ascension-association/ramekin/internal/manifest"
@@ -29,6 +32,13 @@ import (
 func deviceClaim(ctx context.Context, args []string) error {
 	fl := flags("device claim")
 	code := fl.String("code", "", "pairing code shown on the device's console (prompted for if needed)")
+	// Used for devices on official firmware, which get their settings here.
+	channel := fl.String("channel", "", "release channel the device follows (default: first in ramekin.yaml)")
+	healthHTTP := fl.String("health-http", "", "URL that must return 2xx for a new release to be accepted")
+	healthTCP := fl.String("health-tcp", "", "host:port that must accept connections for a new release to be accepted")
+	healthExec := fl.String("health-exec", "", "command run inside the container that must exit 0 for a new release to be accepted")
+	statusURL := fl.String("status-url", "", "URL the device POSTs a signed JSON status report to after each update check")
+	noFleetKey := fl.Bool("no-fleet-key", false, "don't give the device the project's fleet key: it can then only install releases published after its claim")
 	pos, err := parse(fl, args)
 	if err != nil {
 		return err
@@ -94,6 +104,46 @@ func deviceClaim(ctx context.Context, args []string) error {
 	}
 	if req.Token == "" {
 		req.Token = randomHex(24)
+	}
+	if info.NeedsSettings {
+		// Official firmware: the device takes its project from the claim.
+		if p.Releases.GitHub == "" {
+			return errors.New("releases.github must be set in ramekin.yaml: the device gets its apps from it")
+		}
+		pub, err := os.ReadFile(p.Path(p.Signing.PubKey))
+		if err != nil {
+			return err
+		}
+		execArgs, err := splitArgs(*healthExec)
+		if err != nil {
+			return fmt.Errorf("--health-exec: %w", err)
+		}
+		req.Settings = &config.Settings{
+			SigningPubKey: string(pub),
+			Update:        config.Update{Enabled: true, Channel: firstNonEmpty(*channel, p.Channels[0]), URL: p.ChannelURL(), StatusURL: *statusURL},
+			Container:     config.Container{Hostname: name},
+			Health:        config.Health{HTTP: *healthHTTP, TCP: *healthTCP, Exec: execArgs},
+		}
+		req.GokrazyPassword = "" // official firmware runs gokrazy without one
+	}
+	if !*noFleetKey {
+		// Encrypted to the device's own age key, so only it can read it.
+		if k, err := keys.ReadAgeIdentity(p.Path("keys/fleet.agekey")); err == nil {
+			rcpt, err := age.ParseX25519Recipient(info.AgeRecipient)
+			if err != nil {
+				return fmt.Errorf("device age key: %w", err)
+			}
+			var buf bytes.Buffer
+			w, err := age.Encrypt(&buf, rcpt)
+			if err != nil {
+				return err
+			}
+			io.WriteString(w, k)
+			if err := w.Close(); err != nil {
+				return err
+			}
+			req.FleetKey = buf.Bytes()
+		}
 	}
 	record := identity.Record{Name: name, PublicKey: info.PublicKey, AgeRecipient: info.AgeRecipient, HardwareID: info.HardwareID, ClaimedAt: time.Now().UTC()}
 	if req.Record, err = manifest.Seal(record, signer); err != nil {
@@ -215,4 +265,85 @@ func (d *deviceRecord) status(ctx context.Context, timeout time.Duration) (*agen
 		return nil, nil, fmt.Errorf("identity check failed: the answer is for %q, not this request to %s", st.Device, d.name)
 	}
 	return &st, b, nil
+}
+
+// deviceRelease factory-resets a claimed device: it forgets its identity,
+// project settings, apps and app data, keeps its firmware, and restarts
+// unclaimed, ready to be claimed again (by this project or another).
+func deviceRelease(ctx context.Context, args []string) error {
+	fl := flags("device release")
+	yes := fl.Bool("yes", false, "don't ask for confirmation")
+	pos, err := parse(fl, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 {
+		return errors.New("usage: ramekin device release <name>")
+	}
+	name := pos[0]
+	p, err := loadProject()
+	if err != nil {
+		return err
+	}
+	d, err := resolveDevice(p, name)
+	if err != nil {
+		return err
+	}
+	if d.PublicKey == "" {
+		return fmt.Errorf("%s isn't claimed", name)
+	}
+	if !*yes {
+		fmt.Printf("This erases %s's identity, settings, apps and app data; it keeps its firmware and restarts unclaimed.\nType the device's name to confirm: ", name)
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if strings.TrimSpace(line) != name {
+			return errors.New("not confirmed")
+		}
+	}
+	signer, err := keys.LoadSigner(p.Path(p.Signing.Key))
+	if err != nil {
+		return err
+	}
+	body, err := manifest.Seal(agent.ReleaseRequest{Release: name, At: time.Now().UTC()}, signer)
+	if err != nil {
+		return err
+	}
+	resp, err := d.do(ctx, http.MethodDelete, "/v1/claim", bytes.NewReader(body), time.Minute)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent {
+		b, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	os.Remove(d.path)
+	if err := removeRecipient(p.Path(p.Encrypt.RecipientsFile), d.AgeRecipient); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: %v\n", err)
+	}
+	fmt.Printf("released %s: it restarts unclaimed and shows a new pairing code. Its record and key were removed from this project.\n", name)
+	return nil
+}
+
+// removeRecipient drops an age recipient (and the comment line before it)
+// from a recipients file.
+func removeRecipient(file, recipient string) error {
+	if recipient == "" {
+		return nil
+	}
+	b, err := os.ReadFile(file)
+	if err != nil {
+		return err
+	}
+	lines := strings.Split(string(b), "\n")
+	var out []string
+	for i, l := range lines {
+		if strings.TrimSpace(l) == recipient {
+			if len(out) > 0 && strings.HasPrefix(out[len(out)-1], "#") && i > 0 {
+				out = out[:len(out)-1]
+			}
+			continue
+		}
+		out = append(out, l)
+	}
+	return os.WriteFile(file, []byte(strings.Join(out, "\n")), 0o644)
 }

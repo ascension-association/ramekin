@@ -1,17 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
 	"strings"
+	"time"
 
+	"github.com/ascension-association/ramekin/internal/agent"
 	"github.com/ascension-association/ramekin/internal/config"
+	"github.com/ascension-association/ramekin/internal/keys"
+	"github.com/ascension-association/ramekin/internal/manifest"
 )
 
 // stringList is a repeatable string flag.
@@ -51,24 +57,34 @@ func deviceSet(ctx context.Context, args []string) error {
 		return errors.New("usage: ramekin device set <name> [flags]   (no flags: show current settings)")
 	}
 	name := pos[0]
-	cfgPath := filepath.Join(gokrazyDir(*parent), name, "config.json")
-	orig, err := os.ReadFile(cfgPath)
-	if err != nil {
-		return err
-	}
-	var cfg map[string]any
-	if err := json.Unmarshal(orig, &cfg); err != nil {
-		return fmt.Errorf("%s: %w", cfgPath, err)
-	}
-	files, err := deviceFiles(cfg)
-	if err != nil {
-		return fmt.Errorf("%s: %w", cfgPath, err)
-	}
-	raw, _ := files[config.DefaultDevicePath].(string)
-	// Decode without defaults so only what the user set is written back.
+	// A device on official firmware keeps its settings itself: change them
+	// over its API. Otherwise they're in its gokrazy instance.
 	var dev config.Device
-	if err := json.Unmarshal([]byte(raw), &dev); err != nil {
-		return fmt.Errorf("device.json: %w", err)
+	var remote *deviceRecord
+	if rec, cur, ok := deviceSettings(ctx, name); ok {
+		remote = rec
+		dev = config.Device{SigningPubKey: cur.SigningPubKey, Update: cur.Update, Container: cur.Container, Health: cur.Health}
+	}
+	cfgPath := filepath.Join(gokrazyDir(*parent), name, "config.json")
+	var orig []byte
+	var cfg, files map[string]any
+	if remote == nil {
+		orig, err = os.ReadFile(cfgPath)
+		if err != nil {
+			return err
+		}
+		if err := json.Unmarshal(orig, &cfg); err != nil {
+			return fmt.Errorf("%s: %w", cfgPath, err)
+		}
+		files, err = deviceFiles(cfg)
+		if err != nil {
+			return fmt.Errorf("%s: %w", cfgPath, err)
+		}
+		raw, _ := files[config.DefaultDevicePath].(string)
+		// Decode without defaults so only what the user set is written back.
+		if err := json.Unmarshal([]byte(raw), &dev); err != nil {
+			return fmt.Errorf("device.json: %w", err)
+		}
 	}
 
 	set := map[string]bool{}
@@ -171,6 +187,9 @@ func deviceSet(ctx context.Context, args []string) error {
 		}
 	}
 
+	if remote != nil {
+		return putDeviceSettings(ctx, remote, dev)
+	}
 	out, err := json.MarshalIndent(dev, "", "  ")
 	if err != nil {
 		return err
@@ -289,4 +308,63 @@ func splitArgs(s string) ([]string, error) {
 		args = append(args, cur.String())
 	}
 	return args, nil
+}
+
+// deviceSettings returns a claimed device's settings if it keeps them itself
+// (official firmware).
+func deviceSettings(ctx context.Context, name string) (*deviceRecord, *config.Settings, bool) {
+	p, err := loadProject()
+	if err != nil {
+		return nil, nil, false
+	}
+	d, err := resolveDevice(p, name)
+	if err != nil || d.PublicKey == "" {
+		return nil, nil, false
+	}
+	resp, err := d.do(ctx, http.MethodGet, "/v1/settings", nil, 15*time.Second)
+	if err != nil {
+		return nil, nil, false
+	}
+	defer resp.Body.Close()
+	b, err := d.readVerified(resp)
+	if err != nil || resp.StatusCode != http.StatusOK {
+		return nil, nil, false
+	}
+	var info agent.SettingsInfo
+	if json.Unmarshal(b, &info) != nil || info.Source != "device" {
+		return nil, nil, false
+	}
+	return &d, &info.Settings, true
+}
+
+// putDeviceSettings sends new settings, signed with the project key, to a
+// device that keeps its own; it restarts ramekind to apply them.
+func putDeviceSettings(ctx context.Context, d *deviceRecord, dev config.Device) error {
+	s := config.Settings{SigningPubKey: dev.SigningPubKey, Update: dev.Update, Container: dev.Container, Health: dev.Health}
+	check := config.Device{}
+	if err := check.Apply(s); err != nil {
+		return fmt.Errorf("resulting settings are invalid: %w", err)
+	}
+	p, err := loadProject()
+	if err != nil {
+		return err
+	}
+	signer, err := keys.LoadSigner(p.Path(p.Signing.Key))
+	if err != nil {
+		return err
+	}
+	env, err := manifest.Seal(s, signer)
+	if err != nil {
+		return err
+	}
+	resp, err := d.do(ctx, http.MethodPut, "/v1/settings", bytes.NewReader(env), time.Minute)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	if _, err := d.readVerified(resp); err != nil {
+		return err
+	}
+	fmt.Printf("updated %s's settings on the device; it restarts ramekind to apply them\n", d.name)
+	return showDevice(dev)
 }

@@ -10,12 +10,14 @@
 package identity
 
 import (
+	"bytes"
 	"crypto/ed25519"
 	"crypto/rand"
 	"encoding/base64"
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -44,6 +46,7 @@ const SignatureHeader = "Ramekin-Signature"
 const (
 	keyFile    = "device.key"  // Ed25519 seed, hex
 	ageFile    = "age.key"     // AGE-SECRET-KEY-1...
+	fleetFile  = "fleet.key"   // the project's shared age key, if it gave one
 	recordFile = "record.json" // manifest.Envelope of a Record
 	tokenFile  = "api-token"
 )
@@ -55,6 +58,9 @@ type Identity struct {
 	Age    *age.X25519Identity
 	Record *Record // nil until claimed
 	Token  string  // API token, set when claimed
+	// Fleet is the project's shared age key, given at claim time so the
+	// device can install releases published before it was claimed.
+	Fleet *age.X25519Identity
 }
 
 // Ensure loads the device's keys from dir, generating any that are missing.
@@ -86,7 +92,34 @@ func Ensure(dir string) (*Identity, error) {
 	if id.Age, err = age.ParseX25519Identity(ak); err != nil {
 		return nil, fmt.Errorf("%s: %w", ageFile, err)
 	}
+	if b, err := os.ReadFile(filepath.Join(dir, fleetFile)); err == nil {
+		if id.Fleet, err = age.ParseX25519Identity(strings.TrimSpace(string(b))); err != nil {
+			return nil, fmt.Errorf("%s: %w", fleetFile, err)
+		}
+	}
 	return id, nil
+}
+
+// SaveFleetKey decrypts the project's fleet key, which the claim sent
+// encrypted to this device's age key, and keeps it.
+func (id *Identity) SaveFleetKey(encrypted []byte) error {
+	r, err := age.Decrypt(bytes.NewReader(encrypted), id.Age)
+	if err != nil {
+		return fmt.Errorf("fleet key: %w", err)
+	}
+	b, err := io.ReadAll(io.LimitReader(r, 1<<10))
+	if err != nil {
+		return err
+	}
+	k, err := age.ParseX25519Identity(strings.TrimSpace(string(b)))
+	if err != nil {
+		return fmt.Errorf("fleet key: %w", err)
+	}
+	if err := writeFile(filepath.Join(id.Dir, fleetFile), []byte(k.String()+"\n")); err != nil {
+		return err
+	}
+	id.Fleet = k
+	return nil
 }
 
 func readOrCreate(path string, gen func() string) (string, error) {
@@ -136,6 +169,9 @@ func (id *Identity) Load(v signature.Verifier, hardwareID string) error {
 }
 
 func (id *Identity) check(envelope []byte, v signature.Verifier, hardwareID string) (*Record, error) {
+	if v == nil {
+		return nil, errors.New("the device has no project key to check its identity record with")
+	}
 	var rec Record
 	if err := manifest.OpenInto(envelope, v, &rec); err != nil {
 		return nil, fmt.Errorf("identity record %w", err)

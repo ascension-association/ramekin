@@ -32,6 +32,9 @@ type Project struct {
 	Encrypt  Encrypt  `yaml:"encryption"`
 	Releases Releases `yaml:"releases"`
 	Channels []string `yaml:"channels"`
+	// Firmware, if set, is the official firmware the project's devices run
+	// (instead of firmware built from the project's own fleet image).
+	Firmware OfficialFirmware `yaml:"firmware"`
 
 	// Dir is the directory containing ramekin.yaml. Not serialized.
 	Dir string `yaml:"-"`

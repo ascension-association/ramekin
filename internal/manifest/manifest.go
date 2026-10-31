@@ -37,6 +37,9 @@ type Manifest struct {
 	// in Parts); empty for an app release.
 	Kind  string `json:"kind,omitempty"`
 	Parts []Part `json:"parts,omitempty"`
+	// Plain is set when the parts aren't encrypted: official firmware,
+	// which anyone may download and flash.
+	Plain bool `json:"plain,omitempty"`
 }
 
 // Part is one encrypted file of a firmware release.

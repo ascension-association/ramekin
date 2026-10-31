@@ -449,7 +449,7 @@ func (f *Firmware) Check(ctx context.Context) error {
 }
 
 func (f *Firmware) check(ctx context.Context) error {
-	if f.URL == "" || f.Identity == nil {
+	if f.URL == "" {
 		return nil
 	}
 	chURL := strings.TrimSuffix(f.URL, "/") + "/" + f.Channel + ".json"
@@ -483,6 +483,8 @@ func (f *Firmware) check(ctx context.Context) error {
 		return skip("")
 	case st.Failed[m.Version] != "":
 		return skip(st.Failed[m.Version])
+	case !m.Plain && f.Identity == nil:
+		return fmt.Errorf("firmware %s is encrypted, and this device has no key yet (claim it)", m.Version)
 	}
 	f.Log.Printf("firmware: channel %s has %s (serial %d), downloading", f.Channel, m.Version, m.Serial)
 	paths := map[string]string{}
@@ -492,7 +494,7 @@ func (f *Firmware) check(ctx context.Context) error {
 		}
 	}()
 	for _, part := range m.Parts {
-		p, err := f.fetchPart(ctx, chURL, part)
+		p, err := f.fetchPart(ctx, chURL, part, m.Plain)
 		if err != nil {
 			return err
 		}
@@ -506,7 +508,7 @@ func (f *Firmware) check(ctx context.Context) error {
 	return f.install(ctx, m.Version, paths["boot"], paths["root"])
 }
 
-func (f *Firmware) fetchPart(ctx context.Context, chURL string, part manifest.Part) (string, error) {
+func (f *Firmware) fetchPart(ctx context.Context, chURL string, part manifest.Part, plain bool) (string, error) {
 	obj, err := release.Resolve(chURL, part.Object)
 	if err != nil {
 		return "", err
@@ -516,11 +518,13 @@ func (f *Firmware) fetchPart(ctx context.Context, chURL string, part manifest.Pa
 		return "", fmt.Errorf("fetch %s: %w", part.Object, err)
 	}
 	defer rc.Close()
-	plain, err := age.Decrypt(rc, f.Identity)
-	if err != nil {
-		return "", fmt.Errorf("decrypt %s: %w", part.Object, err)
+	var r io.Reader = rc
+	if !plain {
+		if r, err = age.Decrypt(rc, f.Identity); err != nil {
+			return "", fmt.Errorf("decrypt %s: %w", part.Object, err)
+		}
 	}
-	path, sum, _, err := receive(plain, TmpDir(f.DataDir), part.Size)
+	path, sum, _, err := receive(r, TmpDir(f.DataDir), part.Size)
 	if err != nil {
 		return "", err
 	}

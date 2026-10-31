@@ -29,10 +29,19 @@ func cmdFirmware(ctx context.Context, args []string) error {
 	if len(args) == 0 {
 		return errors.New("usage: ramekin firmware init|publish|push ...")
 	}
+	official := config.HasFirmwareProject(".")
 	switch args[0] {
 	case "init":
+		for _, a := range args[1:] {
+			if a == "--board" || strings.HasPrefix(a, "--board=") || a == "-board" {
+				return officialInit(ctx, args[1:])
+			}
+		}
 		return firmwareInit(args[1:])
 	case "publish":
+		if official {
+			return officialPublish(ctx, args[1:])
+		}
 		return firmwarePublish(ctx, args[1:])
 	case "push":
 		return firmwarePush(ctx, args[1:])
@@ -83,6 +92,15 @@ func firmwareInit(args []string) error {
 		Container:     config.Container{Hostname: p.Name},
 		Health:        config.Health{HTTP: *healthHTTP, TCP: *healthTCP, Exec: execArgs},
 	}
+	if p.Firmware.GitHub != "" {
+		// The project's devices run official firmware: this image follows
+		// its channel and trusts its key, so devices move over to it.
+		key, err := fetchFirmwareKey(p.Firmware)
+		if err != nil {
+			return err
+		}
+		dev.Firmware = config.Firmware{URL: p.Firmware.ChannelURL(), SigningPubKey: key}
+	}
 	*parent = gokrazyDir(*parent)
 	var cfg map[string]any
 	if *from != "" {
@@ -118,34 +136,56 @@ func firmwareInit(args []string) error {
 	}
 
 	name := fleetInstance(p)
-	instDir := filepath.Join(*parent, name)
-	if _, err := os.Stat(instDir); err == nil {
-		return fmt.Errorf("%s already exists; change its settings with `ramekin device set %s ...`", instDir, name)
+	cfgPath, err := writeInstance(*parent, name, *from, *target, *lockscreen, cfg, devJSON, p.Name, false)
+	if err != nil {
+		return err
 	}
-	if *from != "" {
+	fmt.Printf(`fleet image: %s
+Every device flashed from it starts unclaimed. Flash one:
+  gok --parent_dir %s -i %s overwrite --full /dev/sdX
+then, once it's on the network, claim it with the pairing code on its console:
+  ramekin device claim <name> <its-ip>
+Publish OS updates for the whole fleet with:
+  ramekin firmware publish --version 1
+`, cfgPath, *parent, name)
+	return nil
+}
+
+// writeInstance creates a gokrazy instance for a fleet or official image:
+// from the instance named from (cfg is its config, copied with its build
+// directory), or from scratch for target. Its devices share hostname until
+// they're claimed. noPassword leaves gokrazy without a network password, so
+// its web interface is reachable only from the device itself: an image
+// anyone can download mustn't carry a password.
+func writeInstance(parent, name, from, target string, lockscreen bool, cfg map[string]any, devJSON []byte, hostname string, noPassword bool) (string, error) {
+	instDir := filepath.Join(parent, name)
+	if _, err := os.Stat(instDir); err == nil {
+		return "", fmt.Errorf("%s already exists; change its settings with `ramekin device set %s ...`", instDir, name)
+	}
+	if from != "" {
 		// The build directory pins package versions (and any local replaces).
-		if _, err := os.Stat(filepath.Join(*parent, *from, "builddir")); err == nil {
+		if _, err := os.Stat(filepath.Join(parent, from, "builddir")); err == nil {
 			if err := os.MkdirAll(instDir, 0o700); err != nil {
-				return err
+				return "", err
 			}
-			if out, err := exec.Command("cp", "-a", filepath.Join(*parent, *from, "builddir"), instDir).CombinedOutput(); err != nil {
-				return fmt.Errorf("copy build directory: %v: %s", err, out)
+			if out, err := exec.Command("cp", "-a", filepath.Join(parent, from, "builddir"), instDir).CombinedOutput(); err != nil {
+				return "", fmt.Errorf("copy build directory: %v: %s", err, out)
 			}
 		}
 		if err := setDeviceJSON(cfg, devJSON); err != nil {
-			return err
+			return "", err
 		}
 	} else {
 		arch, kernel, fw, eeprom := "arm64", "github.com/gokrazy/kernel.rpi", "github.com/gokrazy/firmware", "github.com/gokrazy/rpi-eeprom"
-		switch *target {
+		switch target {
 		case "rpi":
 		case "amd64":
 			arch, kernel, fw, eeprom = "amd64", "github.com/gokrazy/kernel.amd64", "", ""
 		default:
-			return fmt.Errorf("unknown --target %q", *target)
+			return "", fmt.Errorf("unknown --target %q", target)
 		}
 		packages := []any{ramekindPkg}
-		if *lockscreen {
+		if lockscreen {
 			packages = append(packages, lockscreenPkg)
 		}
 		cfg = map[string]any{
@@ -160,43 +200,40 @@ func firmwareInit(args []string) error {
 			"EEPROMPackage":   eeprom,
 		}
 	}
-	// Shared by every device until it's claimed, when each gets its own
-	// (on /perm, which gokrazy reads first).
-	cfg["Hostname"] = p.Name
+	cfg["Hostname"] = hostname
 	update, _ := cfg["Update"].(map[string]any)
 	if update == nil {
 		update = map[string]any{}
 	}
 	delete(update, "Hostname")
-	update["HTTPPassword"] = randomHex(16)
 	update["HTTPPort"] = dashboardPort
+	if noPassword {
+		delete(update, "HTTPPassword")
+		update["NoPassword"] = true
+	} else {
+		// Shared by every device until it's claimed, when each gets its own
+		// (on /perm, which gokrazy reads first).
+		update["HTTPPassword"] = randomHex(16)
+	}
 	cfg["Update"] = update
-	if *lockscreen && *from != "" {
+	if lockscreen && from != "" {
 		pk, _ := cfg["Packages"].([]any)
 		cfg["Packages"] = append(pk, lockscreenPkg)
 	}
 	removed, added, err := enforcePackages(cfg, true)
 	if err != nil {
-		return err
+		return "", err
 	}
 	if err := os.MkdirAll(instDir, 0o700); err != nil {
-		return err
+		return "", err
 	}
 	out, _ := json.MarshalIndent(cfg, "", "    ")
 	cfgPath := filepath.Join(instDir, "config.json")
 	if err := os.WriteFile(cfgPath, append(out, '\n'), 0o600); err != nil {
-		return err
+		return "", err
 	}
 	reportPackages(cfgPath, removed, added, true)
-	fmt.Printf(`fleet image: %s
-Every device flashed from it starts unclaimed. Flash one:
-  gok --parent_dir %s -i %s overwrite --full /dev/sdX
-then, once it's on the network, claim it with the pairing code on its console:
-  ramekin device claim <name> <its-ip>
-Publish OS updates for the whole fleet with:
-  ramekin firmware publish --version 1
-`, cfgPath, *parent, name)
-	return nil
+	return cfgPath, nil
 }
 
 func setDeviceJSON(cfg map[string]any, devJSON []byte) error {
@@ -219,10 +256,24 @@ func setDeviceJSON(cfg map[string]any, devJSON []byte) error {
 	return nil
 }
 
-// buildFirmware stamps version into the fleet instance's device.json and
-// builds its boot and root partition images into dir.
+// buildFirmware builds the project's fleet image (see buildImage).
 func buildFirmware(ctx context.Context, p *config.Project, parent, version, dir string) (boot, root, arch string, err error) {
-	name := fleetInstance(p)
+	url, key := p.FirmwareChannelURL(), ""
+	if p.Firmware.GitHub != "" {
+		// Hand devices over to official firmware: follow its channel, trust its key.
+		if key, err = fetchFirmwareKey(p.Firmware); err != nil {
+			return "", "", "", err
+		}
+		url = p.Firmware.ChannelURL()
+	}
+	return buildImage(ctx, parent, fleetInstance(p), version, url, key, dir)
+}
+
+// buildImage stamps version, the firmware channel URL and (if set) the
+// firmware signing key into a fleet or
+// official instance's device.json and builds its boot and root partition
+// images into dir.
+func buildImage(ctx context.Context, parent, name, version, url, key, dir string) (boot, root, arch string, err error) {
 	cfgPath := filepath.Join(parent, name, "config.json")
 	b, err := os.ReadFile(cfgPath)
 	if err != nil {
@@ -250,7 +301,10 @@ func buildFirmware(ctx context.Context, p *config.Project, parent, version, dir 
 	}
 	reportPackages(cfgPath, removed, added, true)
 	dev.Firmware.Version = version
-	dev.Firmware.URL = p.FirmwareChannelURL() // follows ramekin.yaml
+	dev.Firmware.URL = url // follows ramekin.yaml or firmware.yaml
+	if key != "" {
+		dev.Firmware.SigningPubKey = key
+	}
 	devJSON, _ := json.MarshalIndent(dev, "", "  ")
 	files[config.DefaultDevicePath] = string(devJSON)
 	out, _ := json.MarshalIndent(cfg, "", "    ")
@@ -291,6 +345,9 @@ func firmwarePublish(ctx context.Context, args []string) error {
 	p, err := loadProject()
 	if err != nil {
 		return err
+	}
+	if p.Firmware.GitHub != "" {
+		return fmt.Errorf("this project's devices run official firmware from %s; publish firmware from that repository's firmware project", p.Firmware.GitHub)
 	}
 	if *channel == "" {
 		*channel = p.Channels[0]
