@@ -1,4 +1,4 @@
-// Ramekin fleet console. Device data comes from devices, so it is only ever
+// Ramekin fleet dashboard. Device data comes from devices, so it is only ever
 // inserted as text, never as HTML.
 "use strict";
 
@@ -246,7 +246,7 @@ async function refresh() {
     $("updated").textContent = "updated " + new Date().toLocaleTimeString();
     render();
   } catch (e) {
-    $("banner").textContent = "Lost contact with the console (" + e.message + "). Is `ramekin --gui` still running?";
+    $("banner").textContent = "Lost contact with the dashboard (" + e.message + "). Is `ramekin --dashboard` still running?";
     $("banner").hidden = false;
   }
 }

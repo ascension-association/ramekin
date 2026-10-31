@@ -1,0 +1,129 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="584" viewBox="0 0 1200 584" role="img" aria-label="Example of the Ramekin fleet dashboard with three devices: one healthy, one unhealthy, one offline">
+<rect width="1200" height="584" fill="#0d0d0d"/>
+<text x="32" y="52" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="22" font-weight="650" fill="#f0efec" text-anchor="start">sensors</text>
+<text x="32" y="76" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="400" fill="#c3c2b7" text-anchor="start">Ramekin fleet dashboard · updated 9:41:05 AM</text>
+<rect x="622" y="34" width="96" height="58" rx="10" fill="#1a1a19" stroke="#2a2a28"/>
+<text x="636" y="62" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="22" font-weight="650" fill="#f0efec" text-anchor="start">3</text>
+<text x="636" y="83.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#c3c2b7" text-anchor="start">Devices</text>
+<rect x="726" y="34" width="96" height="58" rx="10" fill="#1a1a19" stroke="#2a2a28"/>
+<text x="740" y="62" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="22" font-weight="650" fill="#f0efec" text-anchor="start">1</text>
+<circle cx="747" cy="79" r="7" fill="#0ca30c"/><path d="M743.6 79.2l2.3 2.3 4.5-4.6" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="759" y="83.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#c3c2b7" text-anchor="start">Healthy</text>
+<rect x="830" y="34" width="96" height="58" rx="10" fill="#1a1a19" stroke="#2a2a28"/>
+<text x="844" y="62" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="22" font-weight="650" fill="#f0efec" text-anchor="start">1</text>
+<circle cx="851" cy="79" r="7" fill="#d03b3b"/><path d="M848.5 76.5l5 5m0-5l-5 5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+<text x="863" y="83.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#c3c2b7" text-anchor="start">Unhealthy</text>
+<rect x="934" y="34" width="96" height="58" rx="10" fill="#1a1a19" stroke="#2a2a28"/>
+<text x="948" y="62" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="22" font-weight="650" fill="#f0efec" text-anchor="start">1</text>
+<circle cx="955" cy="79" r="6" fill="none" stroke="#898781" stroke-width="2"/><path d="M951 83L959 75" stroke="#898781" stroke-width="2"/>
+<text x="967" y="83.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#c3c2b7" text-anchor="start">Offline</text>
+<rect x="1056" y="34" width="112" height="30" rx="8" fill="#0d0d0d" stroke="#2c2c2a"/>
+<text x="1112" y="53.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="middle">Light theme</text>
+<g transform="translate(768 0)">
+<rect x="32.0" y="128" width="368.0" height="424" rx="12" fill="#1a1a19" stroke="#2a2a28"/>
+<text x="48.0" y="162" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="16" font-weight="650" fill="#f0efec" text-anchor="start">kitchen-01</text>
+<text x="48.0" y="181" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable</text>
+<rect x="304.8" y="146" width="79.19999999999999" height="24" rx="12" fill="#0d0d0d" stroke="#2a2a28"/>
+<circle cx="319.8" cy="158" r="7" fill="#0ca30c"/><path d="M316.40000000000003 158.2l2.3 2.3 4.5-4.6" stroke="#fff" stroke-width="1.8" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+<text x="331.8" y="162.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="600" fill="#f0efec" text-anchor="start">Healthy</text>
+<line x1="48.0" x2="384.0" y1="198" y2="198" stroke="#2c2c2a"/>
+<text x="48.0" y="219" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="600" fill="#f0efec" text-anchor="start">1.7.1</text>
+<text x="48.0" y="236" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 12 min ago</text>
+<text x="384.0" y="226" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12" font-weight="600" fill="#3cc43c" text-anchor="end">running</text>
+<line x1="48.0" x2="384.0" y1="246" y2="246" stroke="#2c2c2a"/>
+<text x="48.0" y="267" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="500" fill="#c3c2b7" text-anchor="start">1.7.0</text>
+<text x="48.0" y="284" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 2 h ago</text>
+<rect x="322.8" y="256" width="61.2" height="28" rx="8" fill="#0d0d0d" stroke="#2c2c2a"/>
+<text x="353.4" y="274.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="middle">Switch</text>
+<line x1="48.0" x2="384.0" y1="294" y2="294" stroke="#2c2c2a"/>
+<text x="48.0" y="315" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="500" fill="#c3c2b7" text-anchor="start">1.6.0</text>
+<text x="48.0" y="332" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 3 days ago</text>
+<rect x="322.8" y="304" width="61.2" height="28" rx="8" fill="#0d0d0d" stroke="#2c2c2a"/>
+<text x="353.4" y="322.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="middle">Switch</text>
+<line x1="48.0" x2="384.0" y1="342" y2="342" stroke="#2c2c2a"/>
+<text x="48.0" y="372" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">CPU</text>
+<text x="384.0" y="372" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">4%</text>
+<rect x="48.0" y="379" width="336.0" height="8" rx="4" fill="#1e2c44"/>
+<rect x="48.0" y="379" width="13.4" height="8" rx="4" fill="#5b93ec"/>
+<text x="48.0" y="414" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">Memory</text>
+<text x="384.0" y="414" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">874 MiB of 3.8 GiB</text>
+<rect x="48.0" y="421" width="336.0" height="8" rx="4" fill="#1e2c44"/>
+<rect x="48.0" y="421" width="73.9" height="8" rx="4" fill="#5b93ec"/>
+<text x="48.0" y="456" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">Disk (/perm)</text>
+<text x="384.0" y="456" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">812 MiB of 27 GiB</text>
+<rect x="48.0" y="463" width="336.0" height="8" rx="4" fill="#1e2c44"/>
+<rect x="48.0" y="463" width="10.1" height="8" rx="4" fill="#5b93ec"/>
+<text x="48.0" y="504" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#9a978f" text-anchor="start">▸ Details</text>
+</g>
+<g transform="translate(-384 0)">
+<rect x="416.0" y="128" width="368.0" height="424" rx="12" fill="#1a1a19" stroke="#2a2a28"/>
+<text x="432.0" y="162" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="16" font-weight="650" fill="#f0efec" text-anchor="start">garage-02</text>
+<text x="432.0" y="181" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable</text>
+<rect x="673.6" y="146" width="94.39999999999999" height="24" rx="12" fill="#0d0d0d" stroke="#2a2a28"/>
+<circle cx="688.6" cy="158" r="7" fill="#d03b3b"/><path d="M686.1 155.5l5 5m0-5l-5 5" stroke="#fff" stroke-width="1.8" stroke-linecap="round"/>
+<text x="700.6" y="162.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="600" fill="#f0efec" text-anchor="start">Unhealthy</text>
+<text x="432.0" y="204" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">app is not running (last exit: exit status 2)</text>
+<line x1="432.0" x2="768.0" y1="224" y2="224" stroke="#2c2c2a"/>
+<text x="432.0" y="245" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="600" fill="#f0efec" text-anchor="start">1.7.1</text>
+<text x="432.0" y="262" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 9 min ago</text>
+<text x="768.0" y="252" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12" font-weight="600" fill="#3cc43c" text-anchor="end">running</text>
+<line x1="432.0" x2="768.0" y1="272" y2="272" stroke="#2c2c2a"/>
+<text x="432.0" y="293" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="500" fill="#c3c2b7" text-anchor="start">1.7.0</text>
+<text x="432.0" y="310" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 2 h ago</text>
+<rect x="706.8" y="282" width="61.2" height="28" rx="8" fill="#0d0d0d" stroke="#2c2c2a"/>
+<text x="737.4" y="300.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="middle">Switch</text>
+<line x1="432.0" x2="768.0" y1="320" y2="320" stroke="#2c2c2a"/>
+<text x="432.0" y="341" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="500" fill="#c3c2b7" text-anchor="start">1.6.0</text>
+<text x="432.0" y="358" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 3 days ago</text>
+<rect x="706.8" y="330" width="61.2" height="28" rx="8" fill="#0d0d0d" stroke="#2c2c2a"/>
+<text x="737.4" y="348.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="middle">Switch</text>
+<line x1="432.0" x2="768.0" y1="368" y2="368" stroke="#2c2c2a"/>
+<text x="432.0" y="398" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">CPU</text>
+<text x="768.0" y="398" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">61%</text>
+<rect x="432.0" y="405" width="336.0" height="8" rx="4" fill="#1e2c44"/>
+<rect x="432.0" y="405" width="205.0" height="8" rx="4" fill="#5b93ec"/>
+<text x="432.0" y="440" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">Memory</text>
+<text x="768.0" y="440" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="600" fill="#fab219" text-anchor="end">high</text>
+<text x="730.0" y="440" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">1.6 GiB of 1.9 GiB</text>
+<rect x="432.0" y="447" width="336.0" height="8" rx="4" fill="#3d3115"/>
+<rect x="432.0" y="447" width="282.2" height="8" rx="4" fill="#fab219"/>
+<text x="432.0" y="482" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">Disk (/perm)</text>
+<text x="768.0" y="482" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">11 GiB of 27 GiB</text>
+<rect x="432.0" y="489" width="336.0" height="8" rx="4" fill="#1e2c44"/>
+<rect x="432.0" y="489" width="137.8" height="8" rx="4" fill="#5b93ec"/>
+<text x="432.0" y="530" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#9a978f" text-anchor="start">▸ Details</text>
+</g>
+<g transform="translate(-384 0)" opacity="0.8">
+<rect x="800.0" y="128" width="368.0" height="424" rx="12" fill="#1a1a19" stroke="#2a2a28"/>
+<text x="816.0" y="162" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="16" font-weight="650" fill="#f0efec" text-anchor="start">porch-03</text>
+<text x="816.0" y="181" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable</text>
+<rect x="1072.8" y="146" width="79.19999999999999" height="24" rx="12" fill="#0d0d0d" stroke="#2a2a28"/>
+<circle cx="1087.8" cy="158" r="6" fill="none" stroke="#898781" stroke-width="2"/><path d="M1083.8 162L1091.8 154" stroke="#898781" stroke-width="2"/>
+<text x="1099.8" y="162.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="600" fill="#f0efec" text-anchor="start">Offline</text>
+<text x="816.0" y="204" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">not reachable at 192.168.1.43:8095</text>
+<line x1="816.0" x2="1152.0" y1="224" y2="224" stroke="#2c2c2a"/>
+<text x="816.0" y="245" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="600" fill="#f0efec" text-anchor="start">1.7.0</text>
+<text x="816.0" y="262" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 2 h ago</text>
+<text x="1152.0" y="252" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12" font-weight="600" fill="#3cc43c" text-anchor="end">running</text>
+<line x1="816.0" x2="1152.0" y1="272" y2="272" stroke="#2c2c2a"/>
+<text x="816.0" y="293" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="14" font-weight="500" fill="#c3c2b7" text-anchor="start">1.6.0</text>
+<text x="816.0" y="310" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="12.5" font-weight="400" fill="#9a978f" text-anchor="start">channel stable · installed 3 days ago</text>
+<rect x="1090.8" y="282" width="61.2" height="28" rx="8" fill="#0d0d0d" stroke="#2c2c2a"/>
+<text x="1121.4" y="300.5" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#9a978f" text-anchor="middle">Switch</text>
+<line x1="816.0" x2="1152.0" y1="320" y2="320" stroke="#2c2c2a"/>
+<text x="816.0" y="350" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">CPU</text>
+<text x="1152.0" y="350" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">2%</text>
+<rect x="816.0" y="357" width="336.0" height="8" rx="4" fill="#1e2c44"/>
+<rect x="816.0" y="357" width="8.0" height="8" rx="4" fill="#5b93ec"/>
+<text x="816.0" y="392" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">Memory</text>
+<text x="1152.0" y="392" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">702 MiB of 3.8 GiB</text>
+<rect x="816.0" y="399" width="336.0" height="8" rx="4" fill="#1e2c44"/>
+<rect x="816.0" y="399" width="60.5" height="8" rx="4" fill="#5b93ec"/>
+<text x="816.0" y="434" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#c3c2b7" text-anchor="start">Disk (/perm)</text>
+<text x="1152.0" y="434" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="600" fill="#ef6b6b" text-anchor="end">critical</text>
+<text x="1100.0" y="434" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#f0efec" text-anchor="end">26 GiB of 27 GiB</text>
+<rect x="816.0" y="441" width="336.0" height="8" rx="4" fill="#3f1d1d"/>
+<rect x="816.0" y="441" width="325.9" height="8" rx="4" fill="#d03b3b"/>
+<text x="816.0" y="482" font-family="system-ui,-apple-system,Segoe UI,Roboto,sans-serif" font-size="13" font-weight="400" fill="#9a978f" text-anchor="start">▸ Details</text>
+</g>
+</svg>

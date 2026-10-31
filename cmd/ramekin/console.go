@@ -53,9 +53,9 @@ type console struct {
 	searched map[string]time.Time // last MAC search per device
 }
 
-func cmdGUI(ctx context.Context, args []string) error {
-	fl := flags("--gui")
-	listen := fl.String("listen", "127.0.0.1:8099", "address for the console (loopback only)")
+func cmdDashboard(ctx context.Context, args []string) error {
+	fl := flags("--dashboard")
+	listen := fl.String("listen", "127.0.0.1:8099", "address for the dashboard (loopback only)")
 	noOpen := fl.Bool("no-open", false, "don't open a browser")
 	if _, err := parse(fl, args); err != nil {
 		return err
@@ -80,7 +80,7 @@ func cmdGUI(ctx context.Context, args []string) error {
 	go c.pollLoop(ctx)
 
 	u := "http://" + ln.Addr().String() + "/"
-	fmt.Printf("Ramekin console for %s: %s\n", p.Name, u)
+	fmt.Printf("Ramekin dashboard for %s: %s\n", p.Name, u)
 	fmt.Printf("watching the devices in %s; press Ctrl-C to stop\n", p.Path(filepath.Join(".ramekin", "devices")))
 	if !*noOpen {
 		openBrowser(u)
@@ -104,7 +104,7 @@ func loopbackOnly(addr string) error {
 	if ip := net.ParseIP(host); ip != nil && ip.IsLoopback() {
 		return nil
 	}
-	return fmt.Errorf("--listen %s: the console has no login, so it only listens on a loopback address (e.g. 127.0.0.1:8099); to reach it from another machine, use ssh -L", addr)
+	return fmt.Errorf("--listen %s: the dashboard has no login, so it only listens on a loopback address (e.g. 127.0.0.1:8099); to reach it from another machine, use ssh -L", addr)
 }
 
 func openBrowser(u string) {

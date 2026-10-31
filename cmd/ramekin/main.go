@@ -46,11 +46,11 @@ func init() {
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: ramekin <command> [arguments]\n       ramekin --gui [--listen ADDR] [--no-open]\n\ncommands:")
+	fmt.Fprintln(os.Stderr, "usage: ramekin <command> [arguments]\n       ramekin --dashboard [--listen ADDR] [--no-open]\n\ncommands:")
 	for _, c := range commands {
 		fmt.Fprintf(os.Stderr, "  %-9s %-28s %s\n", c.name, c.args, c.summary)
 	}
-	fmt.Fprintf(os.Stderr, "\n  --gui     open a web console showing the fleet's health and resource use,\n            with rollback (devices in .ramekin/devices; listens on 127.0.0.1:8099)\n")
+	fmt.Fprintf(os.Stderr, "\n  --dashboard  serve a web dashboard of the fleet's health and resource use, with\n               version switching (devices in .ramekin/devices; 127.0.0.1:8099)\n")
 }
 
 func main() {
@@ -60,8 +60,8 @@ func main() {
 	}
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt)
 	defer stop()
-	if os.Args[1] == "--gui" {
-		commands = append(commands, command{name: "--gui", run: cmdGUI})
+	if os.Args[1] == "--dashboard" {
+		commands = append(commands, command{name: "--dashboard", run: cmdDashboard})
 	}
 	for _, c := range commands {
 		if c.name == os.Args[1] {
