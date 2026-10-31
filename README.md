@@ -3,7 +3,7 @@
 # Ramekin
 IoT development, deployment, and update platform
 
-Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appliance that runs one app in a container. You build the app on your computer, push it to the device to try it, then publish it to a whole fleet. Every device updates itself safely.
+Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appliance that runs one app in a container. The app can be written in any language, and it can be one you already have or one you write from scratch. You build the app on your computer, push it to the device to try it, then publish it to a whole fleet. Every device updates itself safely.
 
 - **Safe updates.** A new version must prove it's healthy before it replaces the old one. If it doesn't, the device rolls back on its own.
 - **Secure by default.** Every image is signed and scanned for known vulnerabilities, and fleet releases are encrypted.
