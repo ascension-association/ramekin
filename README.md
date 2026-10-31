@@ -23,7 +23,7 @@ Build a small Go program into a container by hand, publish it as version 1, and 
 
 The examples assume an arm64 board, which is the default `platform`. For a PC or VM, use `ramekin init --platform linux/amd64`, `GOARCH=amd64` and `device init --target amd64`.
 
-**1. Install the CLI and create a project.** This one uses a [persistent overlay](https://apptainer.org/docs/user/main/persistent_overlays.html): you change the container from a shell, and the changes are kept in `overlay.img`.
+**1. Install the CLI and create a project.** This one uses a [persistent overlay](https://apptainer.org/docs/user/main/persistent_overlays.html): you change the container from a shell, and the changes are kept in `overlay.img`. The overlay is here for demonstration, because it shows each step by hand. For real projects, prefer a definition file, which describes the container as code that you can review, version and rebuild from scratch. See "Building with a definition file or a persistent overlay" under Learn more below; the Web Page and Advanced examples use one.
 
 ```sh
 go install github.com/ascension-association/ramekin/cmd/ramekin@latest
