@@ -10,9 +10,9 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 - **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager on the device, just your app and one small agent.
 - **Familiar tools.** Write a `Containerfile` like you already do, or build interactively in a shell.
 
-## Quick start: Hello World
+## Quick start: a TodoMVC app
 
-Serve a "Hello World" web page from a device, then change it and push the update. Each build takes about 20 seconds.
+Build a full-stack [TodoMVC](https://todomvc.com) app, with a web page, an API and a SQLite database, as one small Go server. Run it on a device, add some todos, then change the app's title and push the update. Your todos are still there afterwards.
 
 **Prerequisites on the workstation:**
 - Go
@@ -27,38 +27,179 @@ The examples assume an arm64 board, which is the default `platform`. For a PC or
 
 ```sh
 go install github.com/ascension-association/ramekin/cmd/ramekin@latest
-ramekin init hello-web && cd hello-web && rm app.sh
+ramekin init todomvc && cd todomvc && rm app.sh
 ramekin keys generate
 ```
 
-**2. Write the app.** Create `main.go`, a tiny static file server:
+**2. Write the app.** Create `main.go`, the whole server:
 
 ```go
-// hello-web serves a directory over HTTP.
+// todomvc serves a TodoMVC app: the page, a JSON API, and SQLite storage.
 package main
 
 import (
+	"database/sql"
+	_ "embed"
+	"encoding/json"
 	"flag"
 	"log"
 	"net/http"
+
+	_ "modernc.org/sqlite"
 )
+
+//go:embed index.html
+var page []byte
+
+type todo struct {
+	ID        int64  `json:"id"`
+	Title     string `json:"title"`
+	Completed bool   `json:"completed"`
+}
 
 func main() {
 	addr := flag.String("addr", ":80", "listen address")
-	root := flag.String("root", "/srv", "directory to serve")
+	dbPath := flag.String("db", "/data/todos.db", "SQLite database; keep it in /data so it survives updates")
 	flag.Parse()
-	http.Handle("/", http.FileServer(http.Dir(*root)))
-	log.Printf("serving %s on %s", *root, *addr)
+
+	db, err := sql.Open("sqlite", *dbPath)
+	if err != nil {
+		log.Fatal(err)
+	}
+	db.SetMaxOpenConns(1)
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS todos (
+		id INTEGER PRIMARY KEY, title TEXT NOT NULL, completed INTEGER NOT NULL DEFAULT 0)`); err != nil {
+		log.Fatal(err)
+	}
+
+	http.HandleFunc("GET /{$}", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "text/html; charset=utf-8")
+		w.Write(page)
+	})
+	http.HandleFunc("GET /api/todos", func(w http.ResponseWriter, r *http.Request) {
+		rows, err := db.Query(`SELECT id, title, completed FROM todos ORDER BY id`)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		defer rows.Close()
+		todos := []todo{}
+		for rows.Next() {
+			var t todo
+			if err := rows.Scan(&t.ID, &t.Title, &t.Completed); err != nil {
+				http.Error(w, err.Error(), http.StatusInternalServerError)
+				return
+			}
+			todos = append(todos, t)
+		}
+		json.NewEncoder(w).Encode(todos)
+	})
+	http.HandleFunc("POST /api/todos", func(w http.ResponseWriter, r *http.Request) {
+		var t todo
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil || t.Title == "" {
+			http.Error(w, "a title is required", http.StatusBadRequest)
+			return
+		}
+		res, err := db.Exec(`INSERT INTO todos (title) VALUES (?)`, t.Title)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		t.ID, _ = res.LastInsertId()
+		json.NewEncoder(w).Encode(t)
+	})
+	http.HandleFunc("PATCH /api/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
+		var t todo
+		if err := json.NewDecoder(r.Body).Decode(&t); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		exec(w, `UPDATE todos SET completed = ? WHERE id = ?`, db, t.Completed, r.PathValue("id"))
+	})
+	http.HandleFunc("DELETE /api/todos/{id}", func(w http.ResponseWriter, r *http.Request) {
+		exec(w, `DELETE FROM todos WHERE id = ?`, db, r.PathValue("id"))
+	})
+	http.HandleFunc("DELETE /api/todos", func(w http.ResponseWriter, r *http.Request) {
+		exec(w, `DELETE FROM todos WHERE completed`, db) // "Clear completed"
+	})
+
+	log.Printf("todomvc on %s, data in %s", *addr, *dbPath)
 	log.Fatal(http.ListenAndServe(*addr, nil))
+}
+
+func exec(w http.ResponseWriter, query string, db *sql.DB, args ...any) {
+	if _, err := db.Exec(query, args...); err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	w.WriteHeader(http.StatusNoContent)
 }
 ```
 
-Create `index.html`:
+Create `index.html`, the page the server embeds:
 
 ```html
 <!doctype html>
-<title>Ramekin</title>
-<h1>Hello World</h1>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>todos</title>
+<style>
+  body { font: 16px system-ui, sans-serif; background: #f5f5f5; max-width: 32rem; margin: 2rem auto; padding: 0 1rem; }
+  h1 { text-align: center; font-weight: 200; font-size: 4rem; color: #b83f45; margin: 0 0 1rem; }
+  .app { background: #fff; box-shadow: 0 2px 6px rgb(0 0 0 / .15); }
+  #new { width: 100%; box-sizing: border-box; padding: 1rem; font-size: 1.25rem; border: 0; border-bottom: 1px solid #eee; }
+  ul { list-style: none; margin: 0; padding: 0; }
+  li { display: flex; align-items: center; gap: .75rem; padding: .75rem 1rem; border-bottom: 1px solid #eee; }
+  li span { flex: 1; }
+  li.done span { text-decoration: line-through; color: #999; }
+  button { border: 0; background: none; cursor: pointer; color: #777; }
+  li button { color: #b83f45; font-size: 1.25rem; }
+  footer { display: flex; justify-content: space-between; padding: .75rem 1rem; color: #777; font-size: .875rem; }
+</style>
+<h1>todos</h1>
+<div class="app">
+  <input id="new" placeholder="What needs to be done?" autofocus>
+  <ul id="list"></ul>
+  <footer><span id="left"></span><button id="clear">Clear completed</button></footer>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+const api = (path, method = "GET", body) =>
+  fetch("/api/todos" + path, { method, body: body && JSON.stringify(body) })
+    .then(r => (r.status === 200 ? r.json() : null));
+
+async function render() {
+  const todos = await api("");
+  $("list").replaceChildren(...todos.map(t => {
+    const li = document.createElement("li");
+    li.className = t.completed ? "done" : "";
+    li.innerHTML = '<input type="checkbox"><span></span><button title="Delete">×</button>';
+    li.querySelector("span").textContent = t.title;
+    const box = li.querySelector("input");
+    box.checked = t.completed;
+    box.onchange = () => api("/" + t.id, "PATCH", { completed: box.checked }).then(render);
+    li.querySelector("button").onclick = () => api("/" + t.id, "DELETE").then(render);
+    return li;
+  }));
+  const left = todos.filter(t => !t.completed).length;
+  $("left").textContent = left + (left === 1 ? " item left" : " items left");
+}
+
+$("new").onkeydown = e => {
+  const title = e.target.value.trim();
+  if (e.key !== "Enter" || !title) return;
+  e.target.value = "";
+  api("", "POST", { title }).then(render);
+};
+$("clear").onclick = () => api("", "DELETE").then(render);
+render();
+</script>
+```
+
+Fetch the SQLite driver, which is pure Go, so cross-compiling needs no C toolchain:
+
+```sh
+go mod init todomvc && go mod tidy
 ```
 
 Replace the generated `Containerfile` with:
@@ -67,18 +208,21 @@ Replace the generated `Containerfile` with:
 # Compile natively on the workstation and cross-compile for the device: no qemu needed.
 FROM --platform=$BUILDPLATFORM cgr.dev/chainguard/go:latest AS build
 ARG TARGETOS TARGETARCH
+ENV GOMODCACHE=/cache/mod GOCACHE=/cache/build
 WORKDIR /src
-COPY main.go .
-RUN CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=-s -o /hello-web main.go
+COPY go.mod go.sum ./
+RUN --mount=type=cache,target=/cache go mod download
+COPY main.go index.html ./
+RUN --mount=type=cache,target=/cache \
+    CGO_ENABLED=0 GOOS=$TARGETOS GOARCH=$TARGETARCH go build -trimpath -ldflags=-s -o /todomvc .
 
 FROM cgr.dev/chainguard/wolfi-base:latest
-COPY --from=build /hello-web /usr/bin/hello-web
-COPY index.html /srv/index.html
-# Port 80 is free: Ramekin moves gokrazy's dashboard to 8181.
-CMD ["/usr/bin/hello-web", "-addr", ":80", "-root", "/srv"]
+COPY --from=build /todomvc /usr/bin/todomvc
+# The database lives in /data, which persists across updates and rollbacks.
+CMD ["/usr/bin/todomvc", "-addr", ":80", "-db", "/data/todos.db"]
 ```
 
-**3. Build.** This produces an 8 MiB SIF and scans it. On wolfi-base, expect zero findings.
+**3. Build.** The first build takes about 15 seconds; later builds take a few seconds. It produces a 10 MiB SIF and scans it. On wolfi-base, expect zero findings.
 
 ```sh
 ramekin build
@@ -87,31 +231,37 @@ ramekin build
 **4. Create and flash a development device.**
 
 ```sh
-ramekin device init hello --no-updates --health-http http://127.0.0.1/
-gok -i hello overwrite --full /dev/sdX      # use your SD card or disk; this erases it
+ramekin device init todo --no-updates --health-http http://127.0.0.1/api/todos
+gok -i todo overwrite --full /dev/sdX      # use your SD card or disk; this erases it
 ```
 
 - `--no-updates` makes this a dev device: it accepts `ramekin push` and ignores S3.
-- `--health-http` makes the device accept a new release only after the page itself returns 200. Any URL that returns 2xx works; a dedicated health endpoint is worth adding once the app has dependencies to check.
+- `--health-http` makes the device accept a new release only after the API answers, which also proves the database opened.
 
-**5. Push and open the page.**
-
-```sh
-ramekin push hello                          # OK: hello is running dev-…
-curl http://hello/                          # <h1>Hello World</h1>
-```
-
-**6. Change it and push again.**
+**5. Push it and add some todos.**
 
 ```sh
-sed -i 's|<h1>Hello World</h1>|<h1>Hello, World!</h1>|' index.html
-ramekin build && ramekin push hello --version hello-2
-curl http://hello/                          # <h1>Hello, World!</h1>
-ramekin status hello                        # current: hello-2, previous: the first push
-ramekin logs hello -f
+ramekin push todo                          # OK: todo is running dev-…
 ```
 
-If the new image fails its health check, the device keeps serving the old page, and `push` reports `ROLLED BACK`.
+Open `http://todo/` in a browser and add a few todos. Or use the API:
+
+```sh
+curl -X POST -d '{"title":"Buy milk"}' http://todo/api/todos
+curl http://todo/api/todos                 # [{"id":1,"title":"Buy milk","completed":false}]
+```
+
+**6. Change the title and push again.**
+
+```sh
+sed -i 's|>todos<|>Ramekin todos<|g' index.html
+ramekin build && ramekin push todo --version todo-2
+curl http://todo/api/todos                 # your todos survived the update
+ramekin status todo                        # current: todo-2, previous: the first push
+ramekin logs todo -f
+```
+
+Reload the page to see the new title. The database lives in `/data`, which persists across updates and rollbacks. If a new version fails its health check, the device keeps running the old one, and `push` reports `ROLLED BACK`.
 
 ## Learn more
 
