@@ -10,6 +10,33 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 - **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager on the device, just your app and one small agent.
 - **Simple tooling.** Describe your app in an [Apptainer](https://apptainer.org) definition file (a Dockerfile converts in minutes), or build it interactively in a shell. Apptainer is the only container tool you need.
 
+## Fleet dashboard
+
+`ramekin --dashboard` opens a web page showing every device in the project's `.ramekin/devices`. It refreshes every 5 seconds.
+
+```sh
+ramekin --dashboard                         # http://127.0.0.1:8099/, opened in your browser
+```
+
+<img src="docs/dashboard-demo.svg" alt="Example of the Ramekin fleet dashboard: three device cards, garage-02 unhealthy because its app isn't running, porch-03 offline with its disk nearly full, and kitchen-01 healthy. Each card lists the running release and two earlier ones with Switch buttons, plus CPU, memory and disk meters." width="100%">
+
+*Example with sample data: a three-device fleet. Devices with problems are listed first.*
+
+For each device it shows:
+
+- **Health:** *Healthy*, *Warning* (update checks failing, or the app has restarted), *Updating* (a release is being health-checked), *Unhealthy* (the app isn't running), *Offline*, or *No release*.
+- **Releases:** what's running and the earlier releases the device keeps, each with where it came from (a channel or a push) and when it was installed.
+- **Resource use:** CPU, memory, and disk on the data partition (`/perm`). Each meter turns amber at 80% and red at 95%.
+- **Details:** uptime, last update check, app restarts and last exit, and rejected releases.
+
+**Switching versions.** Each device keeps its three most recent releases that passed their health check there: the one it's running and two earlier ones. The dashboard lists all three, and **Switch** moves the device to either earlier one, after a confirmation. From the terminal, `ramekin rollback <device>` switches to the previous release, and `ramekin rollback <device> <version>` to any kept one. The device runs the chosen release on trial with its usual health check. If that passes, it becomes current and the release it replaced goes to the top of the list, so you can switch back. If it fails, the device keeps the current release and drops the failed one from the list. A device that follows a channel stays on the version you chose until the channel publishes something newer. To roll back the whole fleet, use `ramekin promote` instead.
+
+The dashboard is read-only apart from switching versions. It has no remote shell or other device controls.
+
+**Security.** There's no login, so the dashboard only listens on a loopback address (`--listen 127.0.0.1:PORT`). To use it from another machine, forward the port with `ssh -L 8099:127.0.0.1:8099 workstation`. Device tokens stay in the `ramekin` process and never reach the browser. The page accepts requests only from itself: it checks the `Host` header and requires a key that changes every time the dashboard starts.
+
+The dashboard reaches devices over the local network, the same way `ramekin status` does. If a device's address changes and its MAC is known, the dashboard searches for it at most every 2 minutes. Devices need a ramekind that reports health and resource use. For an older one, the dashboard shows a warning and you should run `ramekin device update <device>`. Devices you can't reach directly can still report to a webhook with `--status-url`, and the report includes the same health and resource data.
+
 ## Quick start: Hello World
 
 Build a small Go program into a container by hand, publish it as version 1, and watch a device install it. Then change the program, publish version 2, and the device updates itself.
@@ -519,37 +546,7 @@ Each device polls its channel every 5 minutes, with jitter. When it finds a newe
 
 **Devices need no credentials for updates.** They only download over HTTPS, and everything they download is checked: the channel pointer and manifest are signed by your project key, and the image must match the manifest's SHA-256 and carry a valid signature. So any static host or CDN could serve the same files; set `update.url` in device.json to point a device elsewhere.
 
-**Fleet status:** run `ramekin device set <device> --status-url https://…` to have a device POST a JSON report after every check (its version, previous version, last error and so on) to a webhook or small service of your choice. `ramekin status <device>` shows the same report for a device you can reach directly, and `ramekin --dashboard` shows every device at once (see "Fleet dashboard" below).
-
-</details>
-
-<details>
-<summary><strong>Fleet dashboard</strong></summary>
-
-`ramekin --dashboard` opens a web page showing every device in the project's `.ramekin/devices`. It refreshes every 5 seconds.
-
-```sh
-ramekin --dashboard                         # http://127.0.0.1:8099/, opened in your browser
-```
-
-<img src="docs/dashboard-demo.svg" alt="Example of the Ramekin fleet dashboard: three device cards, garage-02 unhealthy because its app isn't running, porch-03 offline with its disk nearly full, and kitchen-01 healthy. Each card lists the running release and two earlier ones with Switch buttons, plus CPU, memory and disk meters." width="100%">
-
-*Example with sample data: a three-device fleet. Devices with problems are listed first.*
-
-For each device it shows:
-
-- **Health:** *Healthy*, *Warning* (update checks failing, or the app has restarted), *Updating* (a release is being health-checked), *Unhealthy* (the app isn't running), *Offline*, or *No release*.
-- **Releases:** what's running and the earlier releases the device keeps, each with where it came from (a channel or a push) and when it was installed.
-- **Resource use:** CPU, memory, and disk on the data partition (`/perm`). Each meter turns amber at 80% and red at 95%.
-- **Details:** uptime, last update check, app restarts and last exit, and rejected releases.
-
-**Switching versions.** Each device keeps its three most recent releases that passed their health check there: the one it's running and two earlier ones. The dashboard lists all three, and **Switch** moves the device to either earlier one, after a confirmation. From the terminal, `ramekin rollback <device>` switches to the previous release, and `ramekin rollback <device> <version>` to any kept one. The device runs the chosen release on trial with its usual health check. If that passes, it becomes current and the release it replaced goes to the top of the list, so you can switch back. If it fails, the device keeps the current release and drops the failed one from the list. A device that follows a channel stays on the version you chose until the channel publishes something newer. To roll back the whole fleet, use `ramekin promote` instead.
-
-The dashboard is read-only apart from switching versions. It has no remote shell or other device controls.
-
-**Security.** There's no login, so the dashboard only listens on a loopback address (`--listen 127.0.0.1:PORT`). To use it from another machine, forward the port with `ssh -L 8099:127.0.0.1:8099 workstation`. Device tokens stay in the `ramekin` process and never reach the browser. The page accepts requests only from itself: it checks the `Host` header and requires a key that changes every time the dashboard starts.
-
-The dashboard reaches devices over the local network, the same way `ramekin status` does. If a device's address changes and its MAC is known, the dashboard searches for it at most every 2 minutes. Devices need a ramekind that reports health and resource use. For an older one, the dashboard shows a warning and you should run `ramekin device update <device>`. Devices you can't reach directly can still report to a webhook with `--status-url`, and the report includes the same health and resource data.
+**Fleet status:** run `ramekin device set <device> --status-url https://…` to have a device POST a JSON report after every check (its version, previous version, last error and so on) to a webhook or small service of your choice. `ramekin status <device>` shows the same report for a device you can reach directly, and `ramekin --dashboard` shows every device at once (see "Fleet dashboard" above).
 
 </details>
 
