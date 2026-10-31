@@ -1,0 +1,8 @@
+#!/bin/sh
+# Placeholder workload: replace with your application.
+trap 'echo "[[.Name]]: stopping"; exit 0' TERM INT
+echo "[[.Name]]: hello from $(hostname); data in /data"
+while :; do
+  date >> /data/heartbeat.log
+  sleep 60 & wait $!
+done
