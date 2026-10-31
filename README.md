@@ -12,20 +12,122 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 
 ## Quick start: Hello World
 
-Serve a web page from a device with [nginx](https://nginx.org), then change it and push the update. Each build takes a few seconds.
+Build a small Go program into a container by hand, publish it as version 1, and watch a device install it. Then change the program, publish version 2, and the device updates itself.
 
 **Prerequisites on the workstation:**
 - Go
 - `apptainer`
 - [`gok`](https://gokrazy.org/quickstart/) to flash the device
-- Optionally, [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype) for CVE scans. Without them, pass `--no-scan` to `build` and `push`.
+- A public GitHub repository for the releases, and [`gh`](https://cli.github.com) logged in (or a token in `GITHUB_TOKEN`)
+- [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), which scan every release for known vulnerabilities
 
-The examples assume an arm64 board, which is the default `platform`. For a PC or VM, use `ramekin init --platform linux/amd64` and `device init --target amd64`.
+The examples assume an arm64 board, which is the default `platform`. For a PC or VM, use `ramekin init --platform linux/amd64`, `GOARCH=amd64` and `device init --target amd64`.
 
-**1. Install the CLI and create a project.**
+**1. Install the CLI and create a project.** This one uses a [persistent overlay](https://apptainer.org/docs/user/main/persistent_overlays.html): you change the container from a shell, and the changes are kept in `overlay.img`.
 
 ```sh
 go install github.com/ascension-association/ramekin/cmd/ramekin@latest
+ramekin init hello-world --mode overlay && cd hello-world
+ramekin keys generate
+ramekin overlay init                          # pulls wolfi-base, creates overlay.img
+```
+
+In `ramekin.yaml`, set the command the container runs and the repository to publish to:
+
+```yaml
+source:
+  runscript: /usr/bin/hello
+releases:
+  github: you/your-repo                       # public; turn on immutable releases in its settings
+  branch: main
+```
+
+**2. Write the program.** Create `main.go`:
+
+```go
+// hello prints a greeting, then waits until the device stops it.
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+)
+
+func main() {
+	fmt.Println("Hello")
+	// Keep running: the device restarts an app that exits.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, os.Interrupt)
+	<-stop
+}
+```
+
+Compile it for the device, then copy it into the container from `ramekin shell`. The shell sees your project directory, and whatever you change in it persists:
+
+```sh
+go mod init hello-world
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hello .
+ramekin shell
+```
+```
+Apptainer> cp hello /usr/bin/hello
+Apptainer> hello                              # Hello (Ctrl-C to stop)
+Apptainer> exit
+```
+
+**3. Build.** `ramekin build` combines the base image and your overlay into one 7 MiB image and scans it. Expect zero findings.
+
+```sh
+ramekin build
+```
+
+**4. Create and flash a device.** It follows your repository's `stable` channel:
+
+```sh
+ramekin device init hello
+gok -i hello overwrite --full /dev/sdX        # use your SD card or disk; this erases it
+```
+
+**5. Publish version 1.** This signs and encrypts the image, creates the GitHub release `hello-world-1`, and points the `stable` channel at it.
+
+```sh
+ramekin publish --version 1
+ramekin logs hello -f                         # Hello
+```
+
+The device checks for updates every 5 minutes, and GitHub's CDN can take another 5 to show the change, so allow up to 10 minutes.
+
+**6. Change it and publish version 2.**
+
+```sh
+sed -i 's/"Hello"/"Hello World"/' main.go
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hello .
+echo 'cp hello /usr/bin/hello' | ramekin shell
+ramekin build && ramekin publish --version 2
+ramekin logs hello -f                         # Hello World, within about 10 minutes
+ramekin status hello                          # current: 2, previous: 1
+```
+
+If a new version fails to start, the device rolls back to the previous one on its own.
+
+This project is in [ramekin-hello-world-example](https://github.com/ascension-association/ramekin-hello-world-example), along with its [two releases](https://github.com/ascension-association/ramekin-hello-world-example/releases). To try changes on a device without publishing, see the Web Page Example below, which pushes to a development device.
+
+## Learn more
+
+Each section below expands with a click. You don't need any of them to get started.
+
+<details>
+<summary><strong>Web Page Example</strong></summary>
+
+Serve a web page from a device with [nginx](https://nginx.org), described in an Apptainer definition file. Then change it and push the update straight to a development device, without publishing a release. Each build takes a few seconds.
+
+It needs the same tools as the quick start. `syft` and `grype` are optional here: without them, pass `--no-scan` to `build` and `push`.
+
+**1. Create a project.**
+
+```sh
 ramekin init hello-web && cd hello-web && rm app.sh
 ramekin keys generate
 ```
@@ -70,8 +172,8 @@ ramekin build
 **4. Create and flash a development device.**
 
 ```sh
-ramekin device init hello --no-updates --health-http http://127.0.0.1/
-gok -i hello overwrite --full /dev/sdX      # use your SD card or disk; this erases it
+ramekin device init web --no-updates --health-http http://127.0.0.1/
+gok -i web overwrite --full /dev/sdX        # use your SD card or disk; this erases it
 ```
 
 - `--no-updates` makes this a dev device: it accepts `ramekin push` and ignores release channels.
@@ -80,34 +182,32 @@ gok -i hello overwrite --full /dev/sdX      # use your SD card or disk; this era
 **5. Push it and open the page.**
 
 ```sh
-ramekin push hello                          # OK: hello is running dev-…
-curl http://hello/                          # <h1>Hello</h1>
+ramekin push web                            # OK: web is running dev-…
+curl http://web/                            # <h1>Hello</h1>
 ```
 
 **6. Change it and push again.**
 
 ```sh
 sed -i 's|<h1>Hello</h1>|<h1>Hello World</h1>|' index.html
-ramekin build && ramekin push hello --version hello-2
-curl http://hello/                          # <h1>Hello World</h1>
-ramekin status hello                        # current: hello-2, previous: the first push
-ramekin logs hello -f
+ramekin build && ramekin push web --version web-2
+curl http://web/                            # <h1>Hello World</h1>
+ramekin status web                          # current: web-2, previous: the first push
+ramekin logs web -f
 ```
 
 If a new version fails its health check, the device keeps running the old one, and `push` reports `ROLLED BACK`.
 
-This project is in [ramekin-simple-example](https://github.com/ascension-association/ramekin-simple-example), along with [published releases](https://github.com/ascension-association/ramekin-simple-example/releases) of it. To have a fleet of devices update themselves, see "Ship to a fleet of devices" below.
+This project is in [ramekin-simple-example](https://github.com/ascension-association/ramekin-simple-example), along with [published releases](https://github.com/ascension-association/ramekin-simple-example/releases) of it.
 
-## Learn more
-
-Each section below expands with a click. You don't need any of them to get started.
+</details>
 
 <details>
 <summary><strong>Advanced Example</strong></summary>
 
 A full-stack [TodoMVC](https://todomvc.com) app, with a web page, an API and a SQLite database, as one small Go server. It shows a two-stage definition file that compiles for the device without emulation, a persistent database in `/data`, and a health check that exercises the app. Its releases are published in [ramekin-advanced-example](https://github.com/ascension-association/ramekin-advanced-example/releases).
 
-Start with step 1 of the quick start, using `ramekin init todomvc` instead of `ramekin init hello-web`. Then:
+Start with step 1 of the Web Page Example, using `ramekin init todomvc` instead of `ramekin init hello-web`. Then:
 
 **1. Write the app.** Create `main.go`, the whole server:
 
@@ -450,7 +550,7 @@ gokrazy's own A/B root partitions cover OS and agent updates (`ramekin device up
 
 A health check is how a device decides that a new version works. If you don't configure one, the container just has to stay up for 15 seconds. Pick the strongest check your app supports:
 
-- **Serves HTTP** (like the quick start): `--health-http http://127.0.0.1/` checks that a page returns 2xx.
+- **Serves HTTP** (like the Web Page Example): `--health-http http://127.0.0.1/` checks that a page returns 2xx.
 - **No ports at all** (a sensor poller, an MQTT publisher): no probe. The container only has to survive the grace period.
 - **Listens on a port** (a database, a broker): `--health-tcp 127.0.0.1:5432` checks that the port accepts connections.
 - **Has a readiness tool:** `--health-exec` checks that the app actually works. The command runs with the container's own binaries, files, mounts and Unix sockets, using the container's environment and `PATH`. Exit status 0 means healthy; each attempt may take up to 30s.
@@ -541,7 +641,7 @@ An instance that already uses a non-default port keeps it.
 
 Set `source.mode` in `ramekin.yaml`.
 
-**Definition file mode (infrastructure as code)** is the default and what the quick start uses. `ramekin build` runs `apptainer build` on your definition file (`source.def` in `ramekin.yaml`; `ramekin init` creates `example.def`, and you can name it anything) with a few additions for devices:
+**Definition file mode (infrastructure as code)** is the default, and what the Web Page and Advanced examples use. `ramekin build` runs `apptainer build` on your definition file (`source.def` in `ramekin.yaml`; `ramekin init` creates `example.def`, and you can name it anything) with a few additions for devices:
 
 - **Build stages run natively; the final stage is built for the device.** Apptainer's own `--arch` applies to every stage, which would run compilers under emulation. Instead, Ramekin builds on the workstation's architecture and pins only the final stage's base image to the device's platform. It resolves that image at every build, so `latest` keeps receiving fixes. This is the same pattern as Docker's `FROM --platform=$BUILDPLATFORM`.
 - **Build arguments:** `{{ TARGETOS }}` and `{{ TARGETARCH }}` (the device, e.g. `linux`/`arm64`) and `{{ BUILDARCH }}` (the workstation), for cross-compiling in a build stage.
@@ -556,7 +656,7 @@ Relative `%files` paths resolve from the definition file's directory, and the de
 3. Set `source.runscript` to your app's command.
 4. `ramekin build` flattens base plus overlay into one SIF, including deletions.
 
-A device trusts exactly one signing key: the project's `keys/ramekin-sign.pub`, which `device init` bakes in. To push a different project to the same device, copy over its `keys/` and `.ramekin/` directories, or run `device init` again.
+The quick start uses this mode. The shell runs as the device's architecture (under qemu binfmt on a different workstation), so compile programs on the workstation for the device and copy them in, as the quick start does, rather than installing a compiler in the overlay. Anything installed there ends up in the image.
 
 A device trusts exactly one signing key: the project's `keys/ramekin-sign.pub`, which `device init` bakes in. To push a different project to the same device, copy over its `keys/` and `.ramekin/` directories, or run `device init` again.
 
@@ -599,7 +699,7 @@ The last row covers settings that live on the device instead:
 - **User:** the app runs as root on the device. Drop privileges in the app if it needs to.
 - **Health checks:** use `ramekin device set --health-http`, `--health-tcp` or `--health-exec`.
 
-**One requirement:** the final stage needs `/bin/sh`, because ramekind uses it to load the image's environment before running the runscript. Distroless or `scratch`-based images have no shell. Use an image variant with a shell (the quick start uses Chainguard's `nginx:latest-dev` rather than `nginx:latest`), copy the app into a small base such as `cgr.dev/chainguard/wolfi-base` (as the advanced example does), or bypass the runscript with `ramekin device set --command "/usr/bin/your-app --flag"`.
+**One requirement:** the final stage needs `/bin/sh`, because ramekind uses it to load the image's environment before running the runscript. Distroless or `scratch`-based images have no shell. Use an image variant with a shell (the Web Page Example uses Chainguard's `nginx:latest-dev` rather than `nginx:latest`), copy the app into a small base such as `cgr.dev/chainguard/wolfi-base` (as the advanced example does), or bypass the runscript with `ramekin device set --command "/usr/bin/your-app --flag"`.
 
 </details>
 
