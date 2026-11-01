@@ -94,6 +94,8 @@ ramekin build --no-scan && ramekin push hello --no-scan
 ramekin logs hello -f                         # Hello World from hello
 ```
 
+This project is in [gk-hello-app-example](https://github.com/ascension-association/gk-hello-app-example).
+
 The device keeps its firmware up to date from the official firmware's channel. A firmware update restarts the device more than once, so expect your app to be briefly unavailable a few times while it installs. A new app version runs only after it starts cleanly; otherwise the device goes back to the previous one.
 
 **7. Optional: run without the SD card.** If your R76S has eMMC storage, install onto it. The device keeps its identity and app, then powers off; remove the card and power it on.
