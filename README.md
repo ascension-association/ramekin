@@ -68,22 +68,22 @@ Put the card in the R76S and power it on. After about a minute, its screen shows
 **3. Create a project.** `app.sh` is your app: every 10 seconds it prints "Hello" in large letters with [figlet](http://www.figlet.org/), then the device's name. `example.def` packages it into a container: it starts from [Wolfi](https://github.com/wolfi-dev), adds the `figlet` package, and comes to about 6 MiB with no known vulnerabilities.
 
 ```sh
-ramekin init hello && cd hello
+ramekin init example && cd example
 ramekin keys generate
 ```
 
 **4. Claim the device.** This finds the R76S on your network and asks for the code on its screen. The device then trusts your project's key.
 
 ```sh
-ramekin device claim hello
+ramekin device claim example
 ```
 
 **5. Build the app and push it to the device.**
 
 ```sh
 ramekin build --no-scan
-ramekin push hello --no-scan
-ramekin logs hello -f
+ramekin push example --no-scan
+ramekin logs example -f
 ```
 
 ```
@@ -93,15 +93,15 @@ ramekin logs hello -f
 |  _  |  __/ | | (_) |
 |_| |_|\___|_|_|\___/
 
-from hello
+from example
 ```
 
 **6. Change it and push again.**
 
 ```sh
 sed -i 's/figlet "Hello"/figlet "Hello World"/' app.sh
-ramekin build --no-scan && ramekin push hello --no-scan
-ramekin logs hello -f
+ramekin build --no-scan && ramekin push example --no-scan
+ramekin logs example -f
 ```
 
 ```
@@ -111,7 +111,7 @@ ramekin logs hello -f
 |  _  |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |
 |_| |_|\___|_|_|\___/     \_/\_/ \___/|_|  |_|\__,_|
 
-from hello
+from example
 ```
 
 This project is in [ramekin-app-example](https://github.com/ascension-association/ramekin-app-example).
@@ -121,7 +121,7 @@ The device keeps its firmware up to date from the official firmware's channel. A
 **7. Optional: run without the SD card.** If your R76S has eMMC storage, install onto it. The device keeps its identity and app, then powers off; remove the card and power it on.
 
 ```sh
-ramekin device install hello --to emmc        # add --overwrite to erase an OS already on the eMMC
+ramekin device install example --to emmc      # add --overwrite to erase an OS already on the eMMC
 ```
 
 **Next:**
