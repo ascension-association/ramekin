@@ -63,7 +63,7 @@ curl -LO https://github.com/ascension-association/firmware.r76s/releases/latest/
 gunzip -c r76s.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 ```
 
-Put the card in the R76S and power it on. After about a minute, its screen shows **Pairing code 123456**.
+Put the card in the R76S and power it on. After about a minute, its screen shows a pairing code. Leave it running while you create the project.
 
 **3. Create a project.** `app.sh` is your app: every 10 seconds it prints "Hello" in large letters with [figlet](http://www.figlet.org/), then the device's name. `example.def` packages it into a container: it starts from [Wolfi](https://github.com/wolfi-dev), adds the `figlet` package, and comes to about 6 MiB with no known vulnerabilities.
 
@@ -72,7 +72,7 @@ ramekin init example && cd example
 ramekin keys generate
 ```
 
-**4. Claim the device.** This finds the R76S on your network and asks for the code on its screen. The device then trusts your project's key.
+**4. Claim the device.** Its screen now shows **Pairing code 123456**. This command finds the R76S on your network and asks for that code: type the 6 digits. Or pass it directly: `ramekin device claim example --code 123456`. The code proves you have the device in hand, and once claimed, the device trusts only your project's key. The device picks a new code each time it starts, so use the one on the screen now.
 
 ```sh
 ramekin device claim example
