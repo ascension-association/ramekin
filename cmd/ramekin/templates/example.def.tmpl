@@ -7,10 +7,10 @@ From: cgr.dev/chainguard/wolfi-base:latest
 %files
     app.sh /usr/local/bin/app
 
-# To add packages from the Wolfi repository, add a %post section, e.g.
-#   %post
-#       apk add --no-cache python-3.12
-# On a workstation of another architecture, %post runs under qemu binfmt.
+%post
+    # Packages come from the Wolfi repository, e.g. python-3.12 or nodejs.
+    # On a workstation of another architecture, this runs under qemu binfmt.
+    apk add --no-cache figlet
 
 %runscript
     # ramekind runs this on the device. Handle SIGTERM (as app.sh does) so

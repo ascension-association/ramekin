@@ -36,6 +36,7 @@ func init() {
 		{"push", "<device> [sif]", "sign and push a SIF to a device for testing", cmdPush},
 		{"logs", "<device> [-f]", "show a device's container and agent logs", cmdLogs},
 		{"status", "<device>", "show what a device is running", cmdStatus},
+		{"ps", "<device> [--kernel]", "list the processes running on a device", cmdPs},
 		{"restart", "<device>", "restart a device's container", cmdRestart},
 		{"rollback", "<device> [version]", "switch a device to its previous (or an earlier kept) release, health-checked first", cmdRollback},
 		{"publish", "--version V [--channel C]", "scan, sign, encrypt and upload a release, then update a channel", cmdPublish},

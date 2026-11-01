@@ -15,6 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/sigstore/sigstore/pkg/signature"
+
 	"github.com/ascension-association/ramekin/internal/config"
 	"github.com/ascension-association/ramekin/internal/keys"
 	"github.com/ascension-association/ramekin/internal/manifest"
@@ -430,17 +432,21 @@ func firmwarePublish(ctx context.Context, args []string) error {
 
 // firmwarePush builds the fleet image and installs it on one device over
 // the local network, for trying firmware before publishing it. The device
-// must be claimed: the fleet image carries no identity of its own.
+// must be claimed: the fleet image carries no identity of its own. With
+// --firmware-dir it builds official firmware instead, signed with that
+// firmware project's key, for trying it on a device before publishing it to
+// every device of the board.
 func firmwarePush(ctx context.Context, args []string) error {
 	fl := flags("firmware push")
 	version := fl.String("version", "", "version to stamp the image with (default dev-<time>)")
 	parent := fl.String("gokrazy-dir", "", "gokrazy parent directory (default ~/gokrazy)")
+	fwDir := fl.String("firmware-dir", "", "push official firmware built from this firmware project (its firmware.yaml and signing key)")
 	pos, err := parse(fl, args)
 	if err != nil {
 		return err
 	}
 	if len(pos) != 1 {
-		return errors.New("usage: ramekin firmware push <device> [--version V]")
+		return errors.New("usage: ramekin firmware push <device> [--version V] [--firmware-dir DIR]")
 	}
 	p, err := loadProject()
 	if err != nil {
@@ -453,19 +459,40 @@ func firmwarePush(ctx context.Context, args []string) error {
 	if d.PublicKey == "" {
 		return fmt.Errorf("%s isn't claimed; claim it first (ramekin device claim %s), so it keeps its identity on the fleet image", pos[0], pos[0])
 	}
-	signer, err := keys.LoadSigner(p.Path(p.Signing.Key))
-	if err != nil {
-		return err
+	if *fwDir == "" && p.Firmware.GitHub != "" {
+		return fmt.Errorf("this project's devices run official firmware (%s), which only accepts images signed with its key: pass --firmware-dir with a checkout of that firmware project", p.Firmware.GitHub)
 	}
 	if *version == "" {
 		*version = "dev-" + time.Now().Format("20060102-150405")
 	}
-	outDir := p.Path(filepath.Join("build", "firmware", *version))
-	boot, root, arch, err := buildFirmware(ctx, p, gokrazyDir(*parent), *version, outDir)
-	if err != nil {
-		return err
+	var (
+		signer           signature.Signer
+		boot, root, arch string
+		m                *manifest.Manifest
+	)
+	if *fwDir != "" {
+		fp, err := config.LoadFirmwareProject(*fwDir)
+		if err != nil {
+			return err
+		}
+		if signer, err = keys.LoadSigner(fp.Path(fp.Signing.Key)); err != nil {
+			return err
+		}
+		outDir := fp.Path(filepath.Join("build", *version))
+		if boot, root, arch, err = buildImage(ctx, gokrazyDir(*parent), fp.Instance, *version, fp.Ref().ChannelURL(), "", outDir); err != nil {
+			return err
+		}
+		m = &manifest.Manifest{Name: fp.Board, Version: *version, Arch: arch, Kind: "firmware", Plain: true, Published: time.Now().UTC()}
+	} else {
+		if signer, err = keys.LoadSigner(p.Path(p.Signing.Key)); err != nil {
+			return err
+		}
+		outDir := p.Path(filepath.Join("build", "firmware", *version))
+		if boot, root, arch, err = buildFirmware(ctx, p, gokrazyDir(*parent), *version, outDir); err != nil {
+			return err
+		}
+		m = &manifest.Manifest{Name: p.Name + "-firmware", Version: *version, Arch: arch, Kind: "firmware", Published: time.Now().UTC()}
 	}
-	m := &manifest.Manifest{Name: p.Name + "-firmware", Version: *version, Arch: arch, Kind: "firmware", Published: time.Now().UTC()}
 	for _, part := range []struct{ name, file string }{{"boot", boot}, {"root", root}} {
 		sum, size, err := hashFile(part.file)
 		if err != nil {

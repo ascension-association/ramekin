@@ -111,7 +111,7 @@ func TestFirmwareCancelsBrokenTestboot(t *testing.T) {
 	boot, root := filepath.Join(f.DataDir, "boot"), filepath.Join(f.DataDir, "root")
 	os.WriteFile(boot, []byte("boot of 2"), 0o600)
 	os.WriteFile(root, []byte("root of 2"), 0o600)
-	if err := f.Install(context.Background(), "2", boot, root); err == nil {
+	if err := f.Install(context.Background(), "2", boot, root, nil); err == nil {
 		t.Fatal("installed despite a broken test-boot request")
 	}
 	// The boot partition is written again (without the request), and the
@@ -175,7 +175,7 @@ func TestFirmwareInstallWaitsForRestartAfterTestBoot(t *testing.T) {
 	f := newFirmware(t, g, "2", bootedFrom(t, "2", "3"), nil) // still on the confirmed test boot
 	boot := filepath.Join(f.DataDir, "boot")
 	os.WriteFile(boot, []byte("b"), 0o600)
-	if err := f.Install(context.Background(), "3", boot, boot); err == nil || len(g.calls) != 0 {
+	if err := f.Install(context.Background(), "3", boot, boot, nil); err == nil || len(g.calls) != 0 {
 		t.Fatalf("installed over the running image: %v %v", err, g.calls)
 	}
 }

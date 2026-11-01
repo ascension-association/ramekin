@@ -65,7 +65,7 @@ gunzip -c r76s.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 
 Put the card in the R76S and power it on. After about a minute, its screen shows **Pairing code 123456**.
 
-**3. Create a project.** `app.sh` is your app: it prints "Hello from" and the device's name every 10 seconds. `example.def` packages it into a container.
+**3. Create a project.** `app.sh` is your app: every 10 seconds it prints "Hello" in large letters with [figlet](http://www.figlet.org/), then the device's name. `example.def` packages it into a container: it starts from [Wolfi](https://github.com/wolfi-dev), adds the `figlet` package, and comes to about 6 MiB with no known vulnerabilities.
 
 ```sh
 ramekin init hello && cd hello
@@ -83,15 +83,35 @@ ramekin device claim hello
 ```sh
 ramekin build --no-scan
 ramekin push hello --no-scan
-ramekin logs hello -f                         # Hello from hello
+ramekin logs hello -f
+```
+
+```
+ _   _      _ _
+| | | | ___| | | ___
+| |_| |/ _ \ | |/ _ \
+|  _  |  __/ | | (_) |
+|_| |_|\___|_|_|\___/
+
+from hello
 ```
 
 **6. Change it and push again.**
 
 ```sh
-sed -i 's/Hello from/Hello World from/' app.sh
+sed -i 's/figlet "Hello"/figlet "Hello World"/' app.sh
 ramekin build --no-scan && ramekin push hello --no-scan
-ramekin logs hello -f                         # Hello World from hello
+ramekin logs hello -f
+```
+
+```
+ _   _      _ _        __        __         _     _
+| | | | ___| | | ___   \ \      / /__  _ __| | __| |
+| |_| |/ _ \ | |/ _ \   \ \ /\ / / _ \| '__| |/ _` |
+|  _  |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |
+|_| |_|\___|_|_|\___/     \_/\_/ \___/|_|  |_|\__,_|
+
+from hello
 ```
 
 This project is in [ramekin-app-example](https://github.com/ascension-association/ramekin-app-example).
@@ -570,6 +590,8 @@ The claim gives the device your project's signing key, app channel and app setti
 
 **Storage.** Flashed cards start small and fill themselves: the image's `/perm` partition is 164 MB, and on first boot the device grows it, and its file system, to the end of the card. `ramekin status` lists the device's disks (`disks`), including any eMMC or NVMe.
 
+**Processes.** `ramekin ps <device>` lists what runs on a device: gokrazy's services, ramekind and the app's processes (marked `app`). Add `--kernel` for kernel threads, or `--json` for the device's signed answer. Like status, the answer is signed and answers a fresh nonce.
+
 **Installing to eMMC or NVMe.** `ramekin device install kitchen-01 --to emmc` (or `--to nvme`, or a disk name such as `mmcblk0`) moves a device that boots from an SD card onto its internal storage:
 
 1. **Write the image:** the device downloads its firmware's disk image, checks it against the firmware's signed manifest, and writes it to the disk.
@@ -592,7 +614,7 @@ ramekin firmware init --board r76s --github ascension-association/firmware.r76s 
 ramekin firmware publish --version 1.0.0
 ```
 
-`init` writes `firmware.yaml`, creates the firmware signing key, and sets up the gokrazy instance (`~/gokrazy/firmware.r76s`). Commit `firmware.yaml` and `keys/firmware-sign.pub`. Keep `keys/firmware-sign.key` secret and backed up: without it, no more firmware can be published for those devices.
+`init` writes `firmware.yaml`, creates the firmware signing key, and sets up the gokrazy instance (`~/gokrazy/firmware.r76s`). Before publishing, try a build on one of your own claimed devices: from that device's project, run `ramekin firmware push <device> --version 1.0.1-rc1 --firmware-dir ~/firmware.r76s`. It's signed with the firmware key but not published, so other devices don't see it. Commit `firmware.yaml` and `keys/firmware-sign.pub`. Keep `keys/firmware-sign.key` secret and backed up: without it, no more firmware can be published for those devices.
 
 </details>
 
@@ -616,7 +638,7 @@ ramekin device claim kitchen-01 192.168.1.40  # asks for the pairing code shown 
 
 **Identity checks.**
 - **On the device:** ramekind checks its identity record at every start against the project key, its own keys and the hardware serial. An edited record, or one copied from another device or onto another board, is refused, and the device is treated as unclaimed.
-- **On the workstation:** a claimed device signs every answer with its key. `status`, `push`, `rollback`, firmware pushes and the dashboard accept only answers signed with the key recorded at claim time, and status requests carry a fresh nonce so an old answer can't be replayed. Status reports to `--status-url` are signed too, in the `Ramekin-Signature` header.
+- **On the workstation:** a claimed device signs every answer with its key. `status`, `ps`, `push`, `rollback`, firmware pushes and the dashboard accept only answers signed with the key recorded at claim time, and status requests carry a fresh nonce so an old answer can't be replayed. Status reports to `--status-url` are signed too, in the `Ramekin-Signature` header.
 - **What it doesn't stop:** someone with the device in hand can still copy its keys from the card, or replace the image. Stopping that needs secure boot and hardware key storage (TPM or secure element), which Ramekin doesn't use yet.
 
 **Firmware updates.** Firmware is the fleet image itself: the kernel, gokrazy and ramekind.

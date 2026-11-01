@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"time"
 
@@ -83,6 +84,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("GET /v1/status", a.status)
 	mux.HandleFunc("PUT /v1/image", a.push)
 	mux.HandleFunc("GET /v1/logs", a.logs)
+	mux.HandleFunc("GET /v1/processes", a.processes)
 	mux.HandleFunc("POST /v1/rollback", a.rollback)
 	mux.HandleFunc("POST /v1/switch", a.rollback)
 	mux.HandleFunc("POST /v1/restart", func(w http.ResponseWriter, r *http.Request) {
@@ -250,11 +252,23 @@ func (a *API) pushFirmware(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	if err := a.Firmware.Install(r.Context(), m.Version, files["boot"], files["root"]); err != nil {
-		http.Error(w, fmt.Sprintf("install firmware %s: %v", m.Version, err), http.StatusInternalServerError)
-		return
+	// Answer before the reboot: once it starts, the device may go down before
+	// a later answer reaches the workstation.
+	answered := false
+	ready := func() {
+		answered = true
+		a.writeJSON(w, http.StatusOK, map[string]string{"version": m.Version, "status": "rebooting for a test boot"})
+		if fl, ok := w.(http.Flusher); ok {
+			fl.Flush()
+		}
 	}
-	a.writeJSON(w, http.StatusOK, map[string]string{"version": m.Version, "status": "rebooting for a test boot"})
+	if err := a.Firmware.Install(r.Context(), m.Version, files["boot"], files["root"], ready); err != nil {
+		if answered {
+			a.Firmware.Log.Printf("firmware: reboot into %s: %v", m.Version, err)
+			return
+		}
+		http.Error(w, fmt.Sprintf("install firmware %s: %v", m.Version, err), http.StatusInternalServerError)
+	}
 }
 
 // rollback runs an earlier release on trial: the previous one, or for
@@ -299,6 +313,17 @@ func (a *API) push(w http.ResponseWriter, r *http.Request) {
 		code = http.StatusUnprocessableEntity
 	}
 	a.writeJSON(w, code, res)
+}
+
+// processes lists what runs on the device (kernel threads with ?kernel=1).
+// Like status, the signed answer echoes the caller's nonce.
+func (a *API) processes(w http.ResponseWriter, r *http.Request) {
+	ps, err := Processes("/proc", r.URL.Query().Get("kernel") == "1")
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+	a.writeJSON(w, http.StatusOK, ProcessList{Device: a.Device, Nonce: r.URL.Query().Get("nonce"), Processes: ps})
 }
 
 func (a *API) logs(w http.ResponseWriter, r *http.Request) {
@@ -346,6 +371,9 @@ func (a *API) writeJSON(w http.ResponseWriter, code int, v any) {
 	}
 	b = append(b, '\n')
 	w.Header().Set("Content-Type", "application/json")
+	// With a length, a client has the whole answer once the body arrives,
+	// even if the device then goes down (a firmware push reboots it).
+	w.Header().Set("Content-Length", strconv.Itoa(len(b)))
 	if a.Sign != nil {
 		w.Header().Set(identity.SignatureHeader, a.Sign(b))
 	}

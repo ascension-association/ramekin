@@ -321,14 +321,15 @@ func (f *Firmware) gokrazyDo(ctx context.Context, fn func(Gokrazy) error) error 
 
 // Install writes a firmware image (decrypted boot and root partition files)
 // and reboots into it for a test boot. On success it doesn't return until
-// the reboot is underway.
-func (f *Firmware) Install(ctx context.Context, version, boot, root string) error {
+// the reboot is underway. ready, if not nil, runs just before the reboot
+// (the API answers then, before the device goes down).
+func (f *Firmware) Install(ctx context.Context, version, boot, root string, ready func()) error {
 	f.mu.Lock()
 	defer f.mu.Unlock()
-	return f.install(ctx, version, boot, root)
+	return f.install(ctx, version, boot, root, ready)
 }
 
-func (f *Firmware) install(ctx context.Context, version, boot, root string) error {
+func (f *Firmware) install(ctx context.Context, version, boot, root string, ready func()) error {
 	st := f.load()
 	if st.Pending != nil {
 		return fmt.Errorf("firmware %s is already waiting for its test boot", st.Pending.Version)
@@ -370,6 +371,9 @@ func (f *Firmware) install(ctx context.Context, version, boot, root string) erro
 	}
 	st.Pending = &PendingFirmware{Version: version, At: time.Now().UTC()}
 	f.save(st)
+	if ready != nil {
+		ready()
+	}
 	f.Log.Printf("firmware: rebooting into %s for a test boot", version)
 	return g.Reboot(ctx)
 }
@@ -534,7 +538,7 @@ func (f *Firmware) check(ctx context.Context) error {
 	}
 	st.SeenSerial = m.Serial
 	f.save(st)
-	return f.install(ctx, m.Version, paths["boot"], paths["root"])
+	return f.install(ctx, m.Version, paths["boot"], paths["root"], nil)
 }
 
 func (f *Firmware) fetchPart(ctx context.Context, chURL string, part manifest.Part, plain bool) (string, error) {
