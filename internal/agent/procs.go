@@ -32,8 +32,11 @@ type ProcInfo struct {
 
 // ProcessList is the answer to GET /v1/processes.
 type ProcessList struct {
-	Device    string     `json:"device"`
-	Nonce     string     `json:"nonce,omitempty"`
+	Device string `json:"device"`
+	Nonce  string `json:"nonce,omitempty"`
+	// App is the version of the app (SIF) whose processes are marked
+	// container.
+	App       string     `json:"app,omitempty"`
 	Processes []ProcInfo `json:"processes"`
 }
 

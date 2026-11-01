@@ -295,14 +295,24 @@ func removeAll(dir string) {
 	os.RemoveAll(dir)
 }
 
-// warnNoShell flags images ramekind can't start through their runscript.
+// warnNoShell checks how ramekind will start an image without /bin/sh: it
+// runs the image's command directly, which works for simple runscripts and
+// for an OCI image's ENTRYPOINT and CMD, but not for ones that need a shell.
 func warnNoShell(ctx context.Context, sif string) {
-	if has, known := build.HasShell(ctx, sif); known && !has {
-		fmt.Fprintf(os.Stderr, `WARNING: %s has no /bin/sh. ramekind starts the app through the image's
-runscript, which needs a shell, so this image would fail its health check on a
-device. Base the final stage on an image with a shell (such as
-cgr.dev/chainguard/wolfi-base), or run the app directly with
-  ramekin device set <device> --command "/path/to/app --flags"
-`, filepath.Base(sif))
+	has, known := build.HasShell(ctx, sif)
+	if !known || has {
+		return
 	}
+	argv, err := build.ShellFreeCommand(ctx, sif)
+	if err == nil {
+		fmt.Fprintf(os.Stderr, "%s has no shell; ramekind will run %q directly\n", filepath.Base(sif), argv)
+		return
+	}
+	fmt.Fprintf(os.Stderr, `WARNING: %s has no /bin/sh, and ramekind can't start it without one:
+  %v
+so it would fail its health check on a device. Make its %%runscript a single
+command (such as: exec /usr/bin/app --flag "$@"), add a shell to the image,
+or run the app directly with
+  ramekin device set <device> --command "/path/to/app --flags"
+`, filepath.Base(sif), err)
 }

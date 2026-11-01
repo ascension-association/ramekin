@@ -11,7 +11,7 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 
 - **Safe updates.** A new version must prove it's healthy before it replaces the old one. If it doesn't, the device rolls back on its own.
 - **Secure by default.** Every image is signed and scanned for known vulnerabilities, and fleet releases are encrypted.
-- **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager on the device, just your app and one small agent.
+- **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager in the device's OS, just your app and one small agent. Your app's container holds only what you put in it, which can be just the app, with no shell either.
 - **Simple tooling.** Describe your app in an [Apptainer](https://apptainer.org) definition file (a Dockerfile converts in minutes), or build it interactively in a shell. Apptainer is the only container tool you need.
 
 ## Fleet dashboard
@@ -161,7 +161,8 @@ Replace the generated `example.def` with this [definition file](https://apptaine
 ```singularity
 # A static web page served by nginx, from Chainguard's minimal image, which
 # is rebuilt often to stay free of known vulnerabilities. The -dev variant
-# includes the shell ramekind uses to start it.
+# includes a shell, which %post needs to write the config. (To ship without
+# one, use nginx:latest and copy the config in with %files instead.)
 Bootstrap: docker
 From: cgr.dev/chainguard/nginx:latest-dev
 
@@ -494,7 +495,7 @@ flowchart LR
   GH -->|ramekin watch<br/>daily rescan of SBOMs| W[webhook alert]
 ```
 
-The device runs gokrazy's Go init plus one Ramekin program, `ramekind`. There is no shell, no apptainer binary and no package manager on the device. `ramekind` mounts and runs the image itself, and it handles signature checks, decryption, channel polling, health-gated installs and rollback in-process. Images default to the minimal `cgr.dev/chainguard/wolfi-base`. Ramekin is inspired by CoreOS, RancherOS and Talos.
+The device runs gokrazy's Go init plus one Ramekin program, `ramekind`. There is no shell, no apptainer binary and no package manager in the device's OS. The app's container has only what its image contains: a shell if the app needs one (the quick start's app is a shell script), or none at all (see "Images without a shell"). `ramekind` mounts and runs the image itself, and it handles signature checks, decryption, channel polling, health-gated installs and rollback in-process. Images default to the minimal `cgr.dev/chainguard/wolfi-base`. Ramekin is inspired by CoreOS, RancherOS and Talos.
 
 </details>
 
@@ -590,7 +591,7 @@ The claim gives the device your project's signing key, app channel and app setti
 
 **Storage.** Flashed cards start small and fill themselves: the image's `/perm` partition is 164 MB, and on first boot the device grows it, and its file system, to the end of the card. `ramekin status` lists the device's disks (`disks`), including any eMMC or NVMe.
 
-**Processes.** `ramekin ps <device>` lists what runs on a device: gokrazy's services, ramekind and the app's processes (marked `app`). Add `--kernel` for kernel threads, or `--json` for the device's signed answer. Like status, the answer is signed and answers a fresh nonce.
+**Processes.** `ramekin ps <device>` lists what runs on a device in two groups: the device's own (gokrazy's services, ramekind and gk-lockscreen), then the app's, which run in its container from its SIF. Add `--kernel` for kernel threads, or `--json` for the device's signed answer. Like status, the answer is signed and answers a fresh nonce.
 
 **Installing to eMMC or NVMe.** `ramekin device install kitchen-01 --to emmc` (or `--to nvme`, or a disk name such as `mmcblk0`) moves a device that boots from an SD card onto its internal storage:
 
@@ -938,7 +939,23 @@ The last row covers settings that live on the device instead:
 - **User:** the app runs as root on the device. Drop privileges in the app if it needs to.
 - **Health checks:** use `ramekin device set --health-http`, `--health-tcp` or `--health-exec`.
 
-**One requirement:** the final stage needs `/bin/sh`, because ramekind uses it to load the image's environment before running the runscript. Distroless or `scratch`-based images have no shell. Use an image variant with a shell (the Web Page Example uses Chainguard's `nginx:latest-dev` rather than `nginx:latest`), copy the app into a small base such as `cgr.dev/chainguard/wolfi-base` (as the advanced example does), or bypass the runscript with `ramekin device set --command "/usr/bin/your-app --flag"`.
+**Images without a shell.** Distroless and `scratch`-based images, such as Chainguard's `static` or `nginx:latest`, work too, and an attacker who breaks into the app then finds no shell to use. When an image has no `/bin/sh`, ramekind does the shell's work itself: it applies the image's environment (`%environment` and the image's `ENV`) and runs its command directly, either a single-command `%runscript` or the image's `ENTRYPOINT` and `CMD`. For example:
+
+```singularity
+Bootstrap: docker
+From: cgr.dev/chainguard/static:latest
+
+%files
+    hello /usr/bin/hello
+
+%environment
+    export GREETING="Hello World"
+
+%runscript
+    exec /usr/bin/hello "$@"
+```
+
+It accepts what sh would do with one command line: quoting, `$VAR` and `${VAR:-default}`, and `exec`. A runscript that needs more of a shell (`&&`, pipes, `$(…)`, globs, several commands) can't run without one, and `ramekin build` says so. Keep the image's shell, move that logic into the app, or set the command with `ramekin device set --command "/usr/bin/your-app --flag"`. `%post` runs inside the image at build time, so it needs a shell too: in a shell-free image, add files with `%files`, or build them in an earlier stage.
 
 </details>
 
@@ -965,7 +982,7 @@ The last row covers settings that live on the device instead:
 | Device identity | A claimed device keeps its keys on `/perm` and a record of its identity signed with the project key, bound to the board's hardware serial. It refuses an edited or copied record. Its answers and status reports are signed with its key, and the workstation checks them. |
 | OS updates | Firmware is signed and encrypted like apps. It installs with a test boot, and is kept only if the device comes up healthy. |
 | Fleet dashboard | Listens only on loopback, with no login. It checks the `Host` header (against DNS rebinding) and requires a per-run key (against cross-site requests). Device tokens never reach the browser. |
-| Minimal devices | Each device runs gokrazy's system services, ramekind and (optionally) gk-lockscreen, and nothing else: no shell, no SSH, no other packages. Only local development devices may also run gokrazy's development tools, such as breakglass. `device init`, `device update`, `firmware init` and firmware builds enforce this. |
+| Minimal devices | Each device's OS runs gokrazy's system services, ramekind and (optionally) gk-lockscreen, and nothing else: no shell, no SSH, no other packages. The app's container has only what its image holds, and it can be shell-free too (see "Images without a shell"). Only local development devices may also run gokrazy's development tools, such as breakglass. `device init`, `device update`, `firmware init` and firmware builds enforce this. |
 | No storage credentials on devices | Devices only download, anonymously, over HTTPS. Only the workstation (or CI) holds a GitHub token. |
 
 Key files: `keys/ramekin-sign.key` and `keys/*.agekey` are secret (gitignored). `keys/ramekin-sign.pub` and `keys/recipients.txt` are safe to commit. In CI, pass the signing key PEM in `RAMEKIN_SIGNING_KEY`.

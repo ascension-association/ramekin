@@ -103,17 +103,31 @@ func setupAndExec(s *spec) error {
 
 	env := mergeEnv([]string{"PATH=" + defaultPath, "HOME=/root", "container=ramekin"}, s.Env)
 	argv := []string{"/bin/sh", "-c", launcher, "ramekin"}
-	if len(s.Command) > 0 {
+	switch {
+	case len(s.Command) > 0:
 		argv = s.Command
-		if !strings.Contains(argv[0], "/") {
-			p, err := lookPath("/", argv[0], env)
-			if err != nil {
-				return err
-			}
-			argv = append([]string{p}, argv[1:]...)
+	case !hasShell():
+		// No shell in the image (distroless, scratch): read its environment
+		// and runscript here and run its command directly.
+		var err error
+		if argv, env, err = ShellFreeLaunch("/", env); err != nil {
+			return fmt.Errorf("the image has no /bin/sh, and %w (add a shell to the image, or set its command with ramekin device set --command)", err)
 		}
 	}
+	if !strings.Contains(argv[0], "/") {
+		p, err := lookPath("/", argv[0], env)
+		if err != nil {
+			return err
+		}
+		argv = append([]string{p}, argv[1:]...)
+	}
 	return fmt.Errorf("exec %s: %w", argv[0], unix.Exec(argv[0], argv, env))
+}
+
+// hasShell reports whether the image (now the root) has a /bin/sh.
+func hasShell() bool {
+	fi, err := os.Stat("/bin/sh")
+	return err == nil && !fi.IsDir()
 }
 
 // populate mounts the pseudo-filesystems and binds into the new root.

@@ -16,6 +16,7 @@ import (
 	v1 "github.com/google/go-containerregistry/pkg/v1"
 
 	"github.com/ascension-association/ramekin/internal/config"
+	"github.com/ascension-association/ramekin/internal/container"
 	"github.com/ascension-association/ramekin/internal/sifimg"
 )
 
@@ -289,4 +290,26 @@ func HasShell(ctx context.Context, sif string) (has, known bool) {
 		}
 	}
 	return false, true
+}
+
+// ShellFreeCommand works out, for a SIF without /bin/sh, the command ramekind
+// will run: it reads the image's environment files and runscript the way
+// ramekind does on the device.
+func ShellFreeCommand(ctx context.Context, sif string) ([]string, error) {
+	rfs, err := sifimg.PrimaryRootFS(sif)
+	if err != nil {
+		return nil, err
+	}
+	dir, err := os.MkdirTemp("", "ramekin-meta-")
+	if err != nil {
+		return nil, err
+	}
+	defer os.RemoveAll(dir)
+	root := filepath.Join(dir, "root")
+	cmd := exec.CommandContext(ctx, "unsquashfs", "-q", "-n", "-o", fmt.Sprint(rfs.Offset), "-d", root, sif, ".singularity.d")
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return nil, fmt.Errorf("unsquashfs: %v: %s", err, strings.TrimSpace(string(out)))
+	}
+	argv, _, err := container.ShellFreeLaunch(root, []string{"PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin"})
+	return argv, err
 }

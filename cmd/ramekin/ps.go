@@ -67,32 +67,57 @@ func cmdPs(ctx context.Context, args []string) error {
 		_, err = os.Stdout.Write(b)
 		return err
 	}
-	printProcesses(os.Stdout, l.Processes)
+	printProcesses(os.Stdout, l)
 	return nil
 }
 
-func printProcesses(w io.Writer, ps []agent.ProcInfo) {
-	tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
-	fmt.Fprintln(tw, "PID\tPPID\tUID\tSTATE\tRSS\tCPU\tTHR\tWHERE\tCOMMAND")
-	for _, p := range ps {
-		where := "host"
+// printProcesses lists the device's own processes (gokrazy and Ramekin),
+// then the app's, which run from its SIF in their own container, then any
+// kernel threads.
+func printProcesses(w io.Writer, l agent.ProcessList) {
+	var host, app, kernel []agent.ProcInfo
+	for _, p := range l.Processes {
 		switch {
 		case p.Kernel:
-			where = "kernel"
+			kernel = append(kernel, p)
 		case p.Container:
-			where = "app"
+			app = append(app, p)
+		default:
+			host = append(host, p)
 		}
-		cmd := strings.Join(p.Args, " ")
-		if cmd == "" {
-			cmd = "[" + p.Name + "]"
-		}
-		if p.Exe != "" && (len(p.Args) == 0 || p.Args[0] != p.Exe) {
-			cmd += "  (" + p.Exe + ")"
-		}
-		fmt.Fprintf(tw, "%d\t%d\t%d\t%s\t%s\t%.1fs\t%d\t%s\t%s\n",
-			p.PID, p.PPID, p.UID, p.State, mib(p.RSSBytes), p.CPUSeconds, p.Threads, where, cmd)
 	}
-	tw.Flush()
+	section := func(title string, ps []agent.ProcInfo) {
+		fmt.Fprintf(w, "%s\n", title)
+		if len(ps) == 0 {
+			fmt.Fprintln(w, "  (none)")
+			return
+		}
+		tw := tabwriter.NewWriter(w, 0, 0, 2, ' ', 0)
+		fmt.Fprintln(tw, "  PID\tPPID\tUID\tSTATE\tRSS\tCPU\tTHR\tCOMMAND")
+		for _, p := range ps {
+			cmd := strings.Join(p.Args, " ")
+			if cmd == "" {
+				cmd = "[" + p.Name + "]"
+			}
+			if p.Exe != "" && (len(p.Args) == 0 || p.Args[0] != p.Exe) {
+				cmd += "  (" + p.Exe + ")"
+			}
+			fmt.Fprintf(tw, "  %d\t%d\t%d\t%s\t%s\t%.1fs\t%d\t%s\n",
+				p.PID, p.PPID, p.UID, p.State, mib(p.RSSBytes), p.CPUSeconds, p.Threads, cmd)
+		}
+		tw.Flush()
+	}
+	section("Device (gokrazy and Ramekin):", host)
+	fmt.Fprintln(w)
+	title := "App (in its container, from its SIF):"
+	if l.App != "" {
+		title = fmt.Sprintf("App %s (in its container, from its SIF):", l.App)
+	}
+	section(title, app)
+	if len(kernel) > 0 {
+		fmt.Fprintln(w)
+		section(fmt.Sprintf("Kernel threads (%d):", len(kernel)), kernel)
+	}
 }
 
 func mib(n uint64) string {

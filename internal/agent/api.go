@@ -323,7 +323,14 @@ func (a *API) processes(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
-	a.writeJSON(w, http.StatusOK, ProcessList{Device: a.Device, Nonce: r.URL.Query().Get("nonce"), Processes: ps})
+	l := ProcessList{Device: a.Device, Nonce: r.URL.Query().Get("nonce"), Processes: ps}
+	st := a.Sup.State()
+	if rel := st.Trial; rel != nil {
+		l.App = rel.Version
+	} else if rel := st.Current; rel != nil {
+		l.App = rel.Version
+	}
+	a.writeJSON(w, http.StatusOK, l)
 }
 
 func (a *API) logs(w http.ResponseWriter, r *http.Request) {
