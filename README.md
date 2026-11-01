@@ -65,7 +65,7 @@ gunzip -c r76s.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
 
 Put the card in the R76S and power it on. After about a minute, its screen shows a pairing code. Leave it running while you create the project.
 
-**3. Create a project.** `ramekin init` starts you with a placeholder app, `app.sh`: every 10 seconds it prints "Hello" in large letters with [figlet](http://www.figlet.org/), then the device's name. Replace it with any app, in any language, new or existing: the examples under [Learn more](#learn-more) serve a web page with nginx, run a Go web app with a database, and build an app interactively. `example.def` packages the app into a container: it starts from [Wolfi](https://github.com/wolfi-dev), adds the `figlet` package, and comes to about 6 MiB with no known vulnerabilities.
+**3. Create a project on your Linux computer.** Run this and the remaining steps there, not on the R76S: the device only runs what you push to it. `ramekin init` starts you with a placeholder app, `app.sh`: every 10 seconds it prints "Hello" in large letters with [figlet](http://www.figlet.org/), then the device's name. Replace it with any app, in any language, new or existing: the examples under [Learn more](#learn-more) serve a web page with nginx, run a Go web app with a database, and build an app interactively. `example.def` packages the app into a container: it starts from [Wolfi](https://github.com/wolfi-dev), adds the `figlet` package, and comes to about 6 MiB with no known vulnerabilities.
 
 ```sh
 ramekin init example && cd example
