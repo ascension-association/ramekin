@@ -14,6 +14,8 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 - **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager in the device's OS, just your app and one small agent. Your app's container holds only what you put in it, which can be just the app, with no shell either.
 - **Simple tooling.** Describe your app in an [Apptainer](https://apptainer.org) definition file (a Dockerfile converts in minutes), or build it interactively in a shell. Apptainer is the only container tool you need.
 
+For how Ramekin compares with Mender, balena, RAUC, Talos and similar tools, see [ALTERNATIVES.md](ALTERNATIVES.md).
+
 ## Fleet dashboard
 
 `ramekin --dashboard` opens a web page showing every device in the project's `.ramekin/devices`. It refreshes every 5 seconds.
