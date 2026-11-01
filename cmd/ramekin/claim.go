@@ -44,7 +44,7 @@ func deviceClaim(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(pos) < 1 || len(pos) > 2 {
-		return errors.New("usage: ramekin device claim <name> [address]")
+		return errors.New("usage: ramekin device claim <name> [address]   (no address: find the unclaimed device on the local network)")
 	}
 	name := pos[0]
 	p, err := loadProject()
@@ -58,14 +58,25 @@ func deviceClaim(ctx context.Context, args []string) error {
 
 	rec, recErr := resolveDevice(p, name)
 	existing := recErr == nil
-	if len(pos) == 2 {
+	switch {
+	case len(pos) == 2:
 		addr := pos[1]
 		if !strings.Contains(addr, "://") {
 			addr = "http://" + net.JoinHostPort(addr, "8095")
 		}
 		rec.URL = strings.TrimSuffix(addr, "/")
-	} else if !existing {
-		return fmt.Errorf("no device record for %s; give the device's address: ramekin device claim %s <ip-or-host>", name, name)
+	case !existing:
+		fmt.Println("looking for unclaimed devices on the local network...")
+		found := findUnclaimed(ctx)
+		switch len(found) {
+		case 0:
+			return fmt.Errorf("found no unclaimed device; give its address: ramekin device claim %s <ip-or-host>", name)
+		case 1:
+			rec.URL = found[0]
+			fmt.Printf("found %s\n", strings.TrimPrefix(rec.URL, "http://"))
+		default:
+			return fmt.Errorf("found %d unclaimed devices (%s); say which: ramekin device claim %s <ip-or-host>", len(found), strings.Join(found, ", "), name)
+		}
 	}
 	rec.name, rec.path = name, deviceRecordPath(p, name)
 
@@ -107,9 +118,6 @@ func deviceClaim(ctx context.Context, args []string) error {
 	}
 	if info.NeedsSettings {
 		// Official firmware: the device takes its project from the claim.
-		if p.Releases.GitHub == "" {
-			return errors.New("releases.github must be set in ramekin.yaml: the device gets its apps from it")
-		}
 		pub, err := os.ReadFile(p.Path(p.Signing.PubKey))
 		if err != nil {
 			return err
@@ -118,9 +126,15 @@ func deviceClaim(ctx context.Context, args []string) error {
 		if err != nil {
 			return fmt.Errorf("--health-exec: %w", err)
 		}
+		update := config.Update{StatusURL: *statusURL}
+		if p.Releases.GitHub != "" {
+			update.Enabled, update.Channel, update.URL = true, firstNonEmpty(*channel, p.Channels[0]), p.ChannelURL()
+		} else {
+			fmt.Println("releases.github isn't set in ramekin.yaml, so the device takes apps you push (ramekin push), not published releases")
+		}
 		req.Settings = &config.Settings{
 			SigningPubKey: string(pub),
-			Update:        config.Update{Enabled: true, Channel: firstNonEmpty(*channel, p.Channels[0]), URL: p.ChannelURL(), StatusURL: *statusURL},
+			Update:        update,
 			Container:     config.Container{Hostname: name},
 			Health:        config.Health{HTTP: *healthHTTP, TCP: *healthTCP, Exec: execArgs},
 		}
@@ -346,4 +360,97 @@ func removeRecipient(file, recipient string) error {
 		out = append(out, l)
 	}
 	return os.WriteFile(file, []byte(strings.Join(out, "\n")), 0o644)
+}
+
+// deviceInstall installs a device that runs from an SD card onto its
+// internal storage (eMMC or NVMe), with its identity, settings, apps and
+// data, so the card isn't needed afterwards.
+func deviceInstall(ctx context.Context, args []string) error {
+	fl := flags("device install")
+	to := fl.String("to", "", "emmc, nvme, or a disk name from `ramekin status` (e.g. mmcblk0)")
+	overwrite := fl.Bool("overwrite", false, "erase the disk's existing partitions (e.g. a preinstalled OS)")
+	yes := fl.Bool("yes", false, "don't ask for confirmation")
+	pos, err := parse(fl, args)
+	if err != nil {
+		return err
+	}
+	if len(pos) != 1 || *to == "" {
+		return errors.New("usage: ramekin device install <name> --to emmc|nvme [--overwrite]")
+	}
+	name := pos[0]
+	p, err := loadProject()
+	if err != nil {
+		return err
+	}
+	d, err := resolveDevice(p, name)
+	if err != nil {
+		return err
+	}
+	if d.PublicKey == "" {
+		return fmt.Errorf("%s isn't claimed", name)
+	}
+	st, _, err := d.status(ctx, 30*time.Second)
+	if err != nil {
+		return err
+	}
+	var target *agent.Disk
+	var boot string
+	for i, disk := range st.Disks {
+		if disk.Boot {
+			boot = disk.Name + " (" + disk.Kind + ")"
+		}
+		if !disk.Boot && (disk.Name == *to || disk.Kind == *to) {
+			if target != nil && disk.Name != *to {
+				return fmt.Errorf("%s has more than one %s disk; name one (e.g. --to %s)", name, *to, disk.Name)
+			}
+			target = &st.Disks[i]
+		}
+	}
+	if target == nil {
+		var have []string
+		for _, disk := range st.Disks {
+			have = append(have, fmt.Sprintf("%s (%s, %.1f GB)", disk.Name, disk.Kind, float64(disk.SizeBytes)/1e9))
+		}
+		return fmt.Errorf("%s has no %s disk to install to; it has %s", name, *to, strings.Join(have, ", "))
+	}
+	if !*yes {
+		fmt.Printf("This installs %s's firmware onto %s (%s, %.1f GB, %s) and copies its identity, settings, apps and data there.\n",
+			name, target.Name, target.Kind, float64(target.SizeBytes)/1e9, firstNonEmpty(target.Model, "no model name"))
+		if *overwrite {
+			fmt.Printf("Everything on %s is erased. ", target.Name)
+		}
+		fmt.Printf("It now runs from %s, which is left as it is.\nType the device's name to confirm: ", boot)
+		line, _ := bufio.NewReader(os.Stdin).ReadString('\n')
+		if strings.TrimSpace(line) != name {
+			return errors.New("not confirmed")
+		}
+	}
+	signer, err := keys.LoadSigner(p.Path(p.Signing.Key))
+	if err != nil {
+		return err
+	}
+	body, err := manifest.Seal(agent.InstallRequest{Device: name, Target: target.Name, Overwrite: *overwrite, At: time.Now().UTC()}, signer)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("installing onto %s: downloading and writing the firmware's disk image, then copying data (a few minutes)...\n", target.Name)
+	resp, err := d.do(ctx, http.MethodPost, "/v1/install", bytes.NewReader(body), 30*time.Minute)
+	if err != nil {
+		return err
+	}
+	defer resp.Body.Close()
+	b, _ := io.ReadAll(resp.Body)
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("%s: %s", resp.Status, strings.TrimSpace(string(b)))
+	}
+	var res agent.InstallResult
+	json.Unmarshal(b, &res)
+	if len(res.Erased) > 0 {
+		fmt.Printf("erased %s's previous partitions: %s\n", res.Target, strings.Join(res.Erased, ", "))
+	}
+	fmt.Printf(`installed firmware %s onto %s. The device is powering off.
+Remove the SD card, then power it on: it boots from %s, keeps its identity
+and apps, and grows its storage to fill the disk. Keep the card as a fallback.
+`, res.Firmware, res.Target, res.Target)
+	return nil
 }

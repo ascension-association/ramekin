@@ -28,6 +28,12 @@ const ramekindPkg = "github.com/ascension-association/ramekin/cmd/ramekind"
 
 const lockscreenPkg = "github.com/ascension-association/gk-lockscreen"
 
+// mkfsPkg creates the /perm file system on first boot. Official images don't
+// need it (their /perm is formatted when they're built) and leave it out: it
+// formats /perm whenever /perm isn't mounted, which would wipe a device whose
+// /perm merely failed to mount. It stays allowed for images that want it.
+const mkfsPkg = "github.com/gokrazy/mkfs"
+
 // Ramekin devices run ramekind, and optionally gk-lockscreen, as gokrazy
 // Packages. Devices you develop with and push to locally may also run
 // gokrazy's development tools (devPackages); the fleet image may not. The
@@ -53,7 +59,7 @@ func isKernelPackage(pkg string) bool {
 }
 
 func allowedPackage(pkg string, fleet bool) bool {
-	return pkg == ramekindPkg || pkg == lockscreenPkg || (!fleet && slices.Contains(devPackages, pkg))
+	return pkg == ramekindPkg || pkg == lockscreenPkg || pkg == mkfsPkg || (!fleet && slices.Contains(devPackages, pkg))
 }
 
 // enforcePackages makes a gokrazy config's Packages exactly the allowed set
@@ -232,7 +238,7 @@ func (d *deviceRecord) do(ctx context.Context, method, path string, body io.Read
 
 func cmdDevice(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ramekin device init|claim|release|set|update|find|list ...")
+		return errors.New("usage: ramekin device init|claim|release|install|set|update|find|list ...")
 	}
 	switch args[0] {
 	case "init":
@@ -241,6 +247,8 @@ func cmdDevice(ctx context.Context, args []string) error {
 		return deviceClaim(ctx, args[1:])
 	case "release":
 		return deviceRelease(ctx, args[1:])
+	case "install":
+		return deviceInstall(ctx, args[1:])
 	case "set":
 		return deviceSet(ctx, args[1:])
 	case "update":

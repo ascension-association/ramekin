@@ -32,7 +32,7 @@ func init() {
 		{"scan", "[sif]", "scan a SIF for CVEs and apply the project's policy", cmdScan},
 		{"sign", "[sif]", "sign a SIF with the project key", cmdSign},
 		{"verify", "[sif]", "verify a SIF's signature with the project public key", cmdVerify},
-		{"device", "init|claim|release|set|update|find|list", "create, claim, release, configure, update and locate devices", cmdDevice},
+		{"device", "init|claim|release|install|set|update|find|list", "create, claim, install, configure, update and locate devices", cmdDevice},
 		{"push", "<device> [sif]", "sign and push a SIF to a device for testing", cmdPush},
 		{"logs", "<device> [-f]", "show a device's container and agent logs", cmdLogs},
 		{"status", "<device>", "show what a device is running", cmdStatus},

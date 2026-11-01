@@ -40,6 +40,9 @@ type Manifest struct {
 	// Plain is set when the parts aren't encrypted: official firmware,
 	// which anyone may download and flash.
 	Plain bool `json:"plain,omitempty"`
+	// Image is a gzipped disk image for flashing new devices (official
+	// firmware); devices don't use it. SHA256 and Size are of the .gz file.
+	Image *Part `json:"image,omitempty"`
 }
 
 // Part is one encrypted file of a firmware release.

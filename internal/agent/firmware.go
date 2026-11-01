@@ -138,6 +138,12 @@ func (f *Firmware) Resume(ctx context.Context) {
 		f.Log.Printf("firmware: %v", err)
 	}
 	switch {
+	case testBoot && (st.Pending == nil || st.Pending.Version != f.Version):
+		// Only an install by ramekind is confirmed: making the running
+		// partition permanent on a guess could point the device at an
+		// empty one.
+		f.Log.Printf("firmware: the running root partition isn't the one the boot configuration names, but no install of %s is pending; leaving it", f.Version)
+		st.Current = f.Version
 	case testBoot:
 		f.Log.Printf("firmware: %s is on its test boot; confirming once the device is healthy", f.Version)
 		hctx, cancel := context.WithTimeout(ctx, 10*time.Minute)
@@ -254,7 +260,7 @@ func cmdlineRootPartition(cmdline string) (string, bool) {
 			continue
 		}
 		if base, off, ok := strings.Cut(v, "/PARTNROFF="); ok {
-			b, bok := partitionNumber(base)
+			b, bok := partuuidNumber(base)
 			o, err := strconv.Atoi(off)
 			n, err2 := strconv.Atoi(b)
 			if !bok || err != nil || err2 != nil {
@@ -262,9 +268,32 @@ func cmdlineRootPartition(cmdline string) (string, bool) {
 			}
 			return strconv.Itoa(n + o), true
 		}
+		if strings.HasPrefix(v, "PARTUUID=") {
+			return partuuidNumber(v)
+		}
 		return partitionNumber(v)
 	}
 	return "", false
+}
+
+// partuuidNumber returns the partition number in a gokrazy PARTUUID: the
+// last four hex digits of a GPT partition GUID (…aa4a34d90001), or the
+// suffix of an MBR one (2e18c40c-02).
+func partuuidNumber(v string) (string, bool) {
+	v = strings.TrimPrefix(v, "PARTUUID=")
+	i := strings.LastIndexByte(v, '-')
+	if i < 0 {
+		return "", false
+	}
+	tail := v[i+1:]
+	if len(tail) == 12 { // GPT: …-<8 hex of the disk><4 hex partition number>
+		tail = tail[8:]
+	}
+	n, err := strconv.ParseUint(tail, 16, 32)
+	if err != nil {
+		return "", false
+	}
+	return strconv.FormatUint(n, 10), true
 }
 
 // mountedRootDevice returns the device number ("179:2") of the last mount

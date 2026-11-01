@@ -1,15 +1,19 @@
 package main
 
 import (
+	"compress/gzip"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"time"
 
+	"github.com/ascension-association/ramekin/internal/agent"
 	"github.com/ascension-association/ramekin/internal/config"
 	"github.com/ascension-association/ramekin/internal/keys"
 	"github.com/ascension-association/ramekin/internal/manifest"
@@ -149,7 +153,18 @@ func officialPublish(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	disk, err := buildDisk(ctx, gokrazyDir(*parent), fp.Instance, fp.Board, outDir)
+	if err != nil {
+		return err
+	}
 	m := &manifest.Manifest{Name: fp.Board, Version: *version, Arch: arch, Kind: "firmware", Plain: true, Published: time.Now().UTC()}
+	sum, size, err := hashFile(disk)
+	if err != nil {
+		return err
+	}
+	// Named without the version, so releases/latest/download/<board>.img.gz
+	// always gets the newest one.
+	m.Image = &manifest.Part{Name: "disk", Object: gh.AssetURL(tag, filepath.Base(disk)), SHA256: sum, Size: size}
 	for _, part := range []struct{ name, file string }{{"boot", boot}, {"root", root}} {
 		sum, size, err := hashFile(part.file)
 		if err != nil {
@@ -165,12 +180,12 @@ func officialPublish(ctx context.Context, args []string) error {
 	if err := os.WriteFile(manifestFile, env, 0o644); err != nil {
 		return err
 	}
-	notes := fmt.Sprintf("Official Ramekin firmware %s for %s (linux/%s): gokrazy, the kernel and ramekind, with no project.\n\nFlash boot.img and root.img, or install over the air on a claimed device. The images are signed with the key in %s; devices keep a new image only if it boots healthy, but the kernel has no second copy, so test new kernels first.", *version, fp.Board, arch, config.FirmwareKeyPub)
+	notes := fmt.Sprintf("Official Ramekin firmware %s for %s (linux/%s): gokrazy, the kernel and ramekind, with no project.\n\nFlash %s.img.gz to a new SD card of 2 GB or more (the device grows its storage to fill the card on first boot), or install over the air on a claimed device. The images are signed with the key in %s; devices keep a new image only if it boots healthy, but the kernel has no second copy, so test new kernels first.", *version, fp.Board, arch, fp.Board, config.FirmwareKeyPub)
 	draft, err := gh.CreateDraft(ctx, tag, fp.Board+" "+*version, notes)
 	if err != nil {
 		return err
 	}
-	for _, f := range []string{boot, root, manifestFile} {
+	for _, f := range []string{boot, root, disk, manifestFile} {
 		ctype := "application/octet-stream"
 		if strings.HasSuffix(f, ".json") {
 			ctype = "application/json"
@@ -185,6 +200,76 @@ func officialPublish(ctx context.Context, args []string) error {
 	}
 	fmt.Printf("published %s\n", pub.HTMLURL)
 	return pointChannel(ctx, gh, signer, m, fp.Board, *channel)
+}
+
+// diskBytes is the size of the flashable disk image: gokrazy's boot and two
+// root partitions, plus a small /perm. On first boot gokrazy/mkfs formats
+// /perm, and ramekind then grows it to fill the card (GrowPerm), so the
+// image can stay small and quick to write.
+const diskBytes = 1280 << 20
+
+// buildDisk builds a complete, flashable disk image of the instance (boot,
+// both root partitions and an empty /perm) and gzips it to dir/<name>.img.gz.
+func buildDisk(ctx context.Context, parent, instance, name, dir string) (string, error) {
+	img := filepath.Join(dir, name+".img")
+	fmt.Printf("building the %d MB disk image\n", diskBytes>>20)
+	cmd := exec.CommandContext(ctx, "gok", "--parent_dir", parent, "-i", instance, "overwrite", "--full", img, "--target_storage_bytes", fmt.Sprint(diskBytes))
+	cmd.Stdout, cmd.Stderr = io.Discard, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return "", fmt.Errorf("gok overwrite --full: %w", err)
+	}
+	defer os.Remove(img)
+	if err := formatPerm(ctx, img); err != nil {
+		return "", err
+	}
+	in, err := os.Open(img)
+	if err != nil {
+		return "", err
+	}
+	defer in.Close()
+	gz := img + ".gz"
+	out, err := os.Create(gz)
+	if err != nil {
+		return "", err
+	}
+	zw := gzip.NewWriter(out)
+	if _, err := io.Copy(zw, in); err != nil {
+		out.Close()
+		return "", err
+	}
+	if err := zw.Close(); err != nil {
+		out.Close()
+		return "", err
+	}
+	return gz, out.Close()
+}
+
+// formatPerm creates /perm's ext4 file system in the image, with 4 KiB
+// blocks and room to grow to 2 TiB: the device grows it online to fill its
+// card (agent.GrowPerm), which is only safe with 4 KiB blocks. (Formatted on
+// the device, by gokrazy/mkfs, a partition this small would get 1 KiB ones.)
+func formatPerm(ctx context.Context, img string) error {
+	f, err := os.Open(img)
+	if err != nil {
+		return err
+	}
+	first, last, err := agent.GPTPartition(f, 4)
+	f.Close()
+	if err != nil {
+		return fmt.Errorf("finding /perm in the image: %w", err)
+	}
+	mkfs, err := exec.LookPath("mkfs.ext4")
+	if err != nil {
+		return errors.New("mkfs.ext4 (e2fsprogs) is needed to build the disk image")
+	}
+	sizeKiB := (last - first + 1) / 2
+	cmd := exec.CommandContext(ctx, mkfs, "-F", "-q", "-b", "4096", "-L", "perm",
+		"-E", fmt.Sprintf("offset=%d,resize=%d", first*512, uint64(2<<40)/4096),
+		img, fmt.Sprintf("%dk", sizeKiB))
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("mkfs.ext4: %v: %s", err, out)
+	}
+	return nil
 }
 
 // fetchFirmwareKey downloads official firmware's public signing key from its

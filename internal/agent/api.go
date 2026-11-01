@@ -43,6 +43,8 @@ type API struct {
 	Settings *SettingsStore
 	// Release serves DELETE /v1/claim; nil disables it.
 	Release *Releaser
+	// Install serves POST /v1/install; nil disables it.
+	Install *Installer
 }
 
 // SettingsStore holds a device's project settings. On official firmware they
@@ -76,6 +78,7 @@ func (a *API) Handler() http.Handler {
 	mux.HandleFunc("PUT /v1/firmware", a.pushFirmware)
 	mux.HandleFunc("GET /v1/settings", a.getSettings)
 	mux.HandleFunc("DELETE /v1/claim", func(w http.ResponseWriter, r *http.Request) { a.Release.release(w, r) })
+	mux.HandleFunc("POST /v1/install", func(w http.ResponseWriter, r *http.Request) { a.Install.install(w, r) })
 	mux.HandleFunc("PUT /v1/settings", a.putSettings)
 	mux.HandleFunc("GET /v1/status", a.status)
 	mux.HandleFunc("PUT /v1/image", a.push)

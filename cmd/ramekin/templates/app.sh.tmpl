@@ -1,8 +1,7 @@
 #!/bin/sh
-# Placeholder workload: replace with your application.
-trap 'echo "[[.Name]]: stopping"; exit 0' TERM INT
-echo "[[.Name]]: hello from $(hostname); data in /data"
+# Your app: replace this with your own program, in any language.
+trap 'exit 0' TERM INT
 while :; do
-  date >> /data/heartbeat.log
-  sleep 60 & wait $!
+  echo "Hello from $(hostname)"
+  sleep 10 & wait $!
 done

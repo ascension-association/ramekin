@@ -47,6 +47,10 @@ func main() {
 	if err != nil {
 		logger.Fatalf("config: %v", err)
 	}
+	// A flashed card's /perm starts at the image's size; grow it to the card.
+	if err := agent.GrowPerm(logger); err != nil {
+		logger.Printf("WARNING: couldn't grow /perm to fill the card: %v", err)
+	}
 	// Project settings: official firmware has none and uses the ones saved
 	// when the device was claimed; an image built for a project has them,
 	// and a copy is kept in case the device moves to official firmware.
@@ -252,6 +256,12 @@ func main() {
 			Save:    func(s config.Settings) error { return saveSettings(settingsPath, s) },
 			Restart: func() { restart.Store(true); stop() },
 		},
+	}
+	if ident.Record != nil && cfg.Firmware.URL != "" {
+		api.Install = &agent.Installer{
+			Name: name, Verifier: verifier, FwVerifier: fwVerifier, FirmwareURL: cfg.Firmware.URL,
+			Channel: cfg.FirmwareChannel(), DataDir: cfg.DataDir, Stop: sup.Shutdown, Log: logger,
+		}
 	}
 	if ident.Record != nil {
 		api.Release = &agent.Releaser{

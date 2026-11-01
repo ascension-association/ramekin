@@ -146,6 +146,10 @@ func TestRootPartitionParsing(t *testing.T) {
 	for _, c := range []struct{ in, want string }{
 		{"root=PARTUUID=2e18c40c-02 ro", "2"}, {"root=/dev/mmcblk0p3", "3"}, {"x root=/dev/sda2 y", "2"},
 		{"root=PARTUUID=60c24cc1-f3f9-427a-8199-4f9f2cab0001/PARTNROFF=1 ro", "2"},
+		// The digit before the partition number must not count (seen on a
+		// device whose image ID ends in d9).
+		{"root=PARTUUID=60c24cc1-f3f9-427a-8199-aa4a34d90001/PARTNROFF=1 ro", "2"},
+		{"root=PARTUUID=60c24cc1-f3f9-427a-8199-aa4a34d90003", "3"},
 		{"root=PARTUUID=60c24cc1-f3f9-427a-8199-4f9f2cab0001/PARTNROFF=2 ro", "3"},
 	} {
 		if got, ok := cmdlineRootPartition(c.in); !ok || got != c.want {
@@ -184,6 +188,15 @@ func TestFirmwareRevertsUnhealthyTestBoot(t *testing.T) {
 	st := f.load()
 	if st.Failed["2"] == "" || st.Pending != nil || len(g.calls) != 1 || g.calls[0] != "reboot" {
 		t.Fatalf("state %+v, calls %v", st, g.calls)
+	}
+}
+
+func TestFirmwareIgnoresTestBootItDidntInstall(t *testing.T) {
+	g := &fakeGokrazy{}
+	f := newFirmware(t, g, "2", bootedFrom(t, "2", "3"), nil)
+	f.Resume(context.Background()) // nothing pending
+	if len(g.calls) != 0 {
+		t.Fatalf("switched or rebooted without a pending install: %v", g.calls)
 	}
 }
 

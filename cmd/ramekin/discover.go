@@ -4,15 +4,20 @@ import (
 	"bufio"
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
+	"net/http"
 	"net/netip"
 	"os"
 	"os/exec"
 	"regexp"
+	"sort"
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/ascension-association/ramekin/internal/agent"
 )
 
 // Devices get their address from DHCP, so it can change across reboots. The
@@ -172,4 +177,42 @@ func findByMAC(ctx context.Context, mac, port string) (string, error) {
 		return ip, nil
 	}
 	return "", fmt.Errorf("no device with MAC %s answering on port %s in %v", mac, port, subnets)
+}
+
+// findUnclaimed asks every address on the local subnets whether it's an
+// unclaimed Ramekin device, and returns the URLs of those that are.
+func findUnclaimed(ctx context.Context) []string {
+	var mu sync.Mutex
+	var found []string
+	sem := make(chan struct{}, 256)
+	var wg sync.WaitGroup
+	hc := &http.Client{Timeout: 2 * time.Second}
+	for _, p := range localSubnets() {
+		for a := p.Addr().Next(); p.Contains(a) && a.Next().IsValid() && p.Contains(a.Next()); a = a.Next() {
+			sem <- struct{}{}
+			wg.Add(1)
+			go func(a netip.Addr) {
+				defer func() { <-sem; wg.Done() }()
+				url := "http://" + net.JoinHostPort(a.String(), "8095")
+				req, err := http.NewRequestWithContext(ctx, http.MethodGet, url+"/v1/claim", nil)
+				if err != nil {
+					return
+				}
+				resp, err := hc.Do(req)
+				if err != nil {
+					return
+				}
+				defer resp.Body.Close()
+				var info agent.ClaimInfo
+				if json.NewDecoder(resp.Body).Decode(&info) == nil && !info.Claimed && info.PublicKey != "" {
+					mu.Lock()
+					found = append(found, url)
+					mu.Unlock()
+				}
+			}(a)
+		}
+	}
+	wg.Wait()
+	sort.Strings(found)
+	return found
 }

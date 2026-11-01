@@ -214,6 +214,7 @@ type DeviceStatus struct {
 	LastError string          `json:"last_error,omitempty"`
 	Metrics   *Metrics        `json:"metrics,omitempty"`
 	Firmware  *FirmwareStatus `json:"firmware,omitempty"`
+	Disks     []Disk          `json:"disks,omitempty"`
 	Reported  time.Time       `json:"reported"`
 	// Nonce echoes the workstation's nonce, binding a signed answer to its request.
 	Nonce string `json:"nonce,omitempty"`
@@ -226,6 +227,7 @@ func NewStatus(device string, sup *Supervisor, m *Sampler) DeviceStatus {
 		Device: device, Arch: runtime.GOARCH,
 		Current: st.Current, Previous: st.Previous, History: st.History, Trial: st.Trial, App: sup.App(),
 		BadCount: len(st.Bad), Metrics: m.Snapshot(), Reported: time.Now().UTC(),
+		Disks: Disks("/sys", bootDiskName()),
 	}
 }
 

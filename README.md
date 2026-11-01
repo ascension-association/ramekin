@@ -41,109 +41,72 @@ The dashboard is read-only apart from switching versions. It has no remote shell
 
 The dashboard reaches devices over the local network, the same way `ramekin status` does. If a device's address changes and its MAC is known, the dashboard searches for it at most every 2 minutes. Devices need a ramekind that reports health and resource use. For an older one, the dashboard shows a warning and you should run `ramekin device update <device>`. Devices you can't reach directly can still report to a webhook with `--status-url`, and the report includes the same health and resource data.
 
-## Quick start: Hello World
+## Quick start: Hello World on a NanoPi R76S
 
-Build a small Go program into a container by hand, publish it as version 1, and watch a device install it. Then change the program, publish version 2, and the device updates itself.
+Take a [NanoPi R76S](https://www.friendlyelec.com/index.php?route=product/product&product_id=303) out of the box, flash it, run your first app on it, then change the app. It takes about 10 minutes.
 
-**Prerequisites on the workstation:**
-- Go
-- `apptainer`
-- [`gok`](https://gokrazy.org/quickstart/) to flash the device
-- A public GitHub repository for the releases, and [`gh`](https://cli.github.com) logged in (or a token in `GITHUB_TOKEN`)
-- [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), which scan every release for known vulnerabilities
+**You need:**
+- the R76S, connected to your network, with a screen on its HDMI port;
+- a microSD card of 2 GB or more;
+- on your Linux computer: [Go](https://go.dev/dl/) and [Apptainer](https://apptainer.org/docs/admin/main/installation.html).
 
-The examples assume an arm64 board, which is the default `platform`. For a PC or VM, use `ramekin init --platform linux/amd64`, `GOARCH=amd64` and `device init --target amd64`.
-
-**1. Install the CLI and create a project.** This one uses a [persistent overlay](https://apptainer.org/docs/user/main/persistent_overlays.html): you change the container from a shell, and the changes are kept in `overlay.img`. The overlay is here for demonstration, because it shows each step by hand. For real projects, prefer a definition file, which describes the container as code that you can review, version and rebuild from scratch. See "Building with a definition file or a persistent overlay" under Learn more below; the Web Page and Advanced examples use one.
+**1. Install the CLI.**
 
 ```sh
 go install github.com/ascension-association/ramekin/cmd/ramekin@latest
-ramekin init hello-world --mode overlay && cd hello-world
+```
+
+**2. Flash the firmware.** Download the [official R76S firmware](https://github.com/ascension-association/firmware.r76s) and write it to the card. Replace `/dev/sdX` with your card; this erases it.
+
+```sh
+curl -LO https://github.com/ascension-association/firmware.r76s/releases/latest/download/r76s.img.gz
+gunzip -c r76s.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
+```
+
+Put the card in the R76S and power it on. After about a minute, its screen shows **Pairing code 123456**.
+
+**3. Create a project.** `app.sh` is your app: it prints "Hello from" and the device's name every 10 seconds. `example.def` packages it into a container.
+
+```sh
+ramekin init hello && cd hello
 ramekin keys generate
-ramekin overlay init                          # pulls wolfi-base, creates overlay.img
 ```
 
-In `ramekin.yaml`, set the command the container runs and the repository to publish to:
-
-```yaml
-source:
-  runscript: /usr/bin/hello
-releases:
-  github: you/your-repo                       # public; turn on immutable releases in its settings
-  branch: main
-```
-
-**2. Write the program.** Create `main.go`:
-
-```go
-// hello prints a greeting, then waits until the device stops it.
-package main
-
-import (
-	"fmt"
-	"os"
-	"os/signal"
-	"syscall"
-)
-
-func main() {
-	fmt.Println("Hello")
-	// Keep running: the device restarts an app that exits.
-	stop := make(chan os.Signal, 1)
-	signal.Notify(stop, syscall.SIGTERM, os.Interrupt)
-	<-stop
-}
-```
-
-Compile it for the device, then copy it into the container from `ramekin shell`. The shell sees your project directory, and whatever you change in it persists:
+**4. Claim the device.** This finds the R76S on your network and asks for the code on its screen. The device then trusts your project's key.
 
 ```sh
-go mod init hello-world
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hello .
-ramekin shell
-```
-```
-Apptainer> cp hello /usr/bin/hello
-Apptainer> hello                              # Hello (Ctrl-C to stop)
-Apptainer> exit
+ramekin device claim hello
 ```
 
-**3. Build.** `ramekin build` combines the base image and your overlay into one 7 MiB image and scans it. Expect zero findings.
+**5. Build the app and push it to the device.**
 
 ```sh
-ramekin build
+ramekin build --no-scan
+ramekin push hello --no-scan
+ramekin logs hello -f                         # Hello from hello
 ```
 
-**4. Create and flash a device.** It follows your repository's `stable` channel:
+**6. Change it and push again.**
 
 ```sh
-ramekin device init hello
-gok -i hello overwrite --full /dev/sdX        # use your SD card or disk; this erases it
+sed -i 's/Hello from/Hello World from/' app.sh
+ramekin build --no-scan && ramekin push hello --no-scan
+ramekin logs hello -f                         # Hello World from hello
 ```
 
-**5. Publish version 1.** This signs and encrypts the image, creates the GitHub release `hello-world-1`, and points the `stable` channel at it.
+The device keeps its firmware up to date from the official firmware's channel. A firmware update restarts the device more than once, so expect your app to be briefly unavailable a few times while it installs. A new app version runs only after it starts cleanly; otherwise the device goes back to the previous one.
+
+**7. Optional: run without the SD card.** If your R76S has eMMC storage, install onto it. The device keeps its identity and app, then powers off; remove the card and power it on.
 
 ```sh
-ramekin publish --version 1
-ramekin logs hello -f                         # Hello
+ramekin device install hello --to emmc        # add --overwrite to erase an OS already on the eMMC
 ```
 
-The device checks for updates every 5 minutes, and GitHub's CDN can take another 5 to show the change, so allow up to 10 minutes.
-
-**6. Change it and publish version 2.**
-
-```sh
-sed -i 's/"Hello"/"Hello World"/' main.go
-CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hello .
-echo 'cp hello /usr/bin/hello' | ramekin shell
-ramekin build && ramekin publish --version 2
-ramekin logs hello -f                         # Hello World, within about 10 minutes
-ramekin status hello                          # current: 2, previous: 1
-```
-
-If a new version fails to start, the device rolls back to the previous one on its own.
-
-This project is in [ramekin-hello-world-example](https://github.com/ascension-association/ramekin-hello-world-example), along with its [two releases](https://github.com/ascension-association/ramekin-hello-world-example/releases). To try changes on a device without publishing, see the Web Page Example below, which pushes to a development device.
+**Next:**
+- **Scan for vulnerabilities:** install [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), then drop `--no-scan`.
+- **Ship to a fleet:** publish releases that every device installs itself (see "Ship to a fleet of devices" below).
+- **Watch devices:** `ramekin --dashboard` shows every device.
+- **Other boards and techniques:** see the examples under Learn more.
 
 ## Learn more
 
@@ -154,7 +117,7 @@ Each section below expands with a click. You don't need any of them to get start
 
 Serve a web page from a device with [nginx](https://nginx.org), described in an Apptainer definition file. Then change it and push the update straight to a development device, without publishing a release. Each build takes a few seconds.
 
-It needs the same tools as the quick start. `syft` and `grype` are optional here: without them, pass `--no-scan` to `build` and `push`.
+It needs Go, Apptainer and [`gok`](https://gokrazy.org/quickstart/), which builds and flashes an OS image for this one device. `syft` and `grype` are optional: without them, pass `--no-scan` to `build` and `push`.
 
 **1. Create a project.**
 
@@ -603,6 +566,16 @@ The claim gives the device your project's signing key, app channel and app setti
 - **Changing settings:** `ramekin device set kitchen-01 …` changes them over the device's API, signed with the project key.
 - **Handing a device over:** `ramekin device release kitchen-01` factory-resets it, for another project or a fresh claim. It erases the device's identity, settings, apps and app data, keeps its firmware, and restarts unclaimed.
 
+**Storage.** Flashed cards start small and fill themselves: the image's `/perm` partition is 164 MB, and on first boot the device grows it, and its file system, to the end of the card. `ramekin status` lists the device's disks (`disks`), including any eMMC or NVMe.
+
+**Installing to eMMC or NVMe.** `ramekin device install kitchen-01 --to emmc` (or `--to nvme`, or a disk name such as `mmcblk0`) moves a device that boots from an SD card onto its internal storage:
+
+1. **Write the image:** the device downloads its firmware's disk image, checks it against the firmware's signed manifest, and writes it to the disk.
+2. **Give the disk its own partition IDs:** every card flashed from the image shares them, and the kernel finds its root partition by them.
+3. **Copy the data:** it copies its identity, settings, apps and app data, then powers off. Remove the card and power on: it boots from the internal disk and grows `/perm` to fill it.
+
+The command asks you to confirm, and the request is signed with the project key. It refuses a disk that already has partitions, such as a preinstalled OS, unless you add `--overwrite`. The card itself is left unchanged, as a fallback. On the R76S, the board boots from an SD card when one is inserted, so the card must come out. Booting from NVMe depends on the board's bootloader, so check that your board can before installing there.
+
 **Two kinds of trust:**
 - **Firmware:** official firmware is signed with the firmware repository's key (`keys/firmware-sign.pub`). It isn't encrypted, because it contains no secrets.
 - **Apps:** they're signed with your project's key. The device takes that key from the claim, and the pairing code shows the claim comes from someone with the device in hand.
@@ -657,6 +630,13 @@ ramekin firmware publish --version 1.0.0           # release it; every claimed d
 2. It reads the boot partition back first. If gokrazy didn't mark the test boot correctly, it puts the boot partition back and cancels the install instead of rebooting.
 3. On the test boot, the new image must start its app, pass the app's health check and reach its firmware channel. Then ramekind makes the image permanent and restarts once more, so gokrazy treats the new root as the active one.
 4. If the check fails, ramekind reboots into the previous image. A test boot that hangs also returns to the previous image, at the next reboot or when the hardware watchdog fires. The failed version is recorded and never installed again from the channel.
+
+**A firmware update restarts the device more than once,** and the app stops each time:
+- **Into the new image:** for its test boot.
+- **Once it's confirmed:** so gokrazy treats the new image's partition as the active one.
+- **If it's rejected:** back into the previous image.
+
+Each restart takes about half a minute, so plan for a minute or two in which the app comes and goes. Publish firmware when that's acceptable for your devices.
 
 During a test boot, a failing app isn't rolled back: the firmware is what's on trial. `ramekin status` shows the firmware version, any pending install and failed versions, and so does the dashboard's Details.
 
@@ -784,9 +764,116 @@ Relative `%files` paths resolve from the definition file's directory, and the de
 3. Set `source.runscript` to your app's command.
 4. `ramekin build` flattens base plus overlay into one SIF, including deletions.
 
-The quick start uses this mode. The shell runs as the device's architecture (under qemu binfmt on a different workstation), so compile programs on the workstation for the device and copy them in, as the quick start does, rather than installing a compiler in the overlay. Anything installed there ends up in the image.
+The Persistent Overlay Example uses this mode. The shell runs as the device's architecture (under qemu binfmt on a different workstation), so compile programs on the workstation for the device and copy them in, as that example does, rather than installing a compiler in the overlay. Anything installed there ends up in the image.
 
 A device trusts exactly one signing key: the project's `keys/ramekin-sign.pub`, which `device init` bakes in. To push a different project to the same device, copy over its `keys/` and `.ramekin/` directories, or run `device init` again.
+
+</details>
+
+<details>
+<summary><strong>Persistent Overlay Example</strong></summary>
+
+Build a small Go program into a container by hand, publish it as version 1, and watch a device install it. Then change the program, publish version 2, and the device updates itself.
+
+**Prerequisites on the workstation:**
+- Go
+- `apptainer`
+- [`gok`](https://gokrazy.org/quickstart/) to flash the device
+- A public GitHub repository for the releases, and [`gh`](https://cli.github.com) logged in (or a token in `GITHUB_TOKEN`)
+- [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), which scan every release for known vulnerabilities
+
+The examples assume an arm64 board, which is the default `platform`. For a PC or VM, use `ramekin init --platform linux/amd64`, `GOARCH=amd64` and `device init --target amd64`.
+
+**1. Install the CLI and create a project.** This one uses a [persistent overlay](https://apptainer.org/docs/user/main/persistent_overlays.html): you change the container from a shell, and the changes are kept in `overlay.img`. The overlay is here for demonstration, because it shows each step by hand. For real projects, prefer a definition file, which describes the container as code that you can review, version and rebuild from scratch. See "Building with a definition file or a persistent overlay" above; the Web Page and Advanced examples use one.
+
+```sh
+go install github.com/ascension-association/ramekin/cmd/ramekin@latest
+ramekin init hello-world --mode overlay && cd hello-world
+ramekin keys generate
+ramekin overlay init                          # pulls wolfi-base, creates overlay.img
+```
+
+In `ramekin.yaml`, set the command the container runs and the repository to publish to:
+
+```yaml
+source:
+  runscript: /usr/bin/hello
+releases:
+  github: you/your-repo                       # public; turn on immutable releases in its settings
+  branch: main
+```
+
+**2. Write the program.** Create `main.go`:
+
+```go
+// hello prints a greeting, then waits until the device stops it.
+package main
+
+import (
+	"fmt"
+	"os"
+	"os/signal"
+	"syscall"
+)
+
+func main() {
+	fmt.Println("Hello")
+	// Keep running: the device restarts an app that exits.
+	stop := make(chan os.Signal, 1)
+	signal.Notify(stop, syscall.SIGTERM, os.Interrupt)
+	<-stop
+}
+```
+
+Compile it for the device, then copy it into the container from `ramekin shell`. The shell sees your project directory, and whatever you change in it persists:
+
+```sh
+go mod init hello-world
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hello .
+ramekin shell
+```
+```
+Apptainer> cp hello /usr/bin/hello
+Apptainer> hello                              # Hello (Ctrl-C to stop)
+Apptainer> exit
+```
+
+**3. Build.** `ramekin build` combines the base image and your overlay into one 7 MiB image and scans it. Expect zero findings.
+
+```sh
+ramekin build
+```
+
+**4. Create and flash a device.** It follows your repository's `stable` channel:
+
+```sh
+ramekin device init hello
+gok -i hello overwrite --full /dev/sdX        # use your SD card or disk; this erases it
+```
+
+**5. Publish version 1.** This signs and encrypts the image, creates the GitHub release `hello-world-1`, and points the `stable` channel at it.
+
+```sh
+ramekin publish --version 1
+ramekin logs hello -f                         # Hello
+```
+
+The device checks for updates every 5 minutes, and GitHub's CDN can take another 5 to show the change, so allow up to 10 minutes.
+
+**6. Change it and publish version 2.**
+
+```sh
+sed -i 's/"Hello"/"Hello World"/' main.go
+CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build -o hello .
+echo 'cp hello /usr/bin/hello' | ramekin shell
+ramekin build && ramekin publish --version 2
+ramekin logs hello -f                         # Hello World, within about 10 minutes
+ramekin status hello                          # current: 2, previous: 1
+```
+
+If a new version fails to start, the device rolls back to the previous one on its own.
+
+This project is in [ramekin-hello-world-example](https://github.com/ascension-association/ramekin-hello-world-example), along with its [two releases](https://github.com/ascension-association/ramekin-hello-world-example/releases). To try changes on a device without publishing, see the Web Page Example above, which pushes to a development device.
 
 </details>
 
