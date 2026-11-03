@@ -1,6 +1,7 @@
 package main
 
 import (
+	"bytes"
 	"context"
 	"embed"
 	"errors"
@@ -66,6 +67,11 @@ func cmdInit(ctx context.Context, args []string) error {
 		rel := strings.TrimSuffix(strings.TrimPrefix(path, "templates/"), ".tmpl")
 		rel = strings.ReplaceAll(rel, "dot-", ".")
 		if (rel == "example.def" || rel == "app.sh") && *mode != config.ModeDef {
+			return nil
+		}
+		if rel == watchWorkflow {
+			// A new project publishes nothing yet, so there is nothing to
+			// watch; the first `ramekin publish` adds the workflow.
 			return nil
 		}
 		dst := filepath.Join(abs, rel)
@@ -348,4 +354,29 @@ func dropCopiedKeys(signKey, signPub, fleetKey, recipients string) ([]string, er
 		}
 	}
 	return dropped, nil
+}
+
+// watchWorkflow is the GitHub Actions workflow that runs `ramekin watch`.
+const watchWorkflow = ".github/workflows/ramekin-cve-watch.yml"
+
+// addWatchWorkflow writes the CVE watch workflow into the project unless it
+// already exists, and reports whether it did.
+func addWatchWorkflow(p *config.Project) (bool, error) {
+	dst := p.Path(watchWorkflow)
+	if _, err := os.Stat(dst); !errors.Is(err, os.ErrNotExist) {
+		return false, err
+	}
+	src := "templates/dot-github/workflows/ramekin-cve-watch.yml.tmpl"
+	t, err := template.New(filepath.Base(src)).Delims("[[", "]]").ParseFS(templates, src)
+	if err != nil {
+		return false, err
+	}
+	var buf bytes.Buffer
+	if err := t.Execute(&buf, map[string]string{"Name": p.Name}); err != nil {
+		return false, err
+	}
+	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
+		return false, err
+	}
+	return true, os.WriteFile(dst, buf.Bytes(), 0o644)
 }
