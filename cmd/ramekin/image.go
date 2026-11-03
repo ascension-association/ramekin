@@ -107,12 +107,22 @@ func cmdKeys(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	fleet := p.Path("keys/fleet.agekey")
+	dropped, err := dropCopiedKeys(p.Path(p.Signing.Key), p.Path(p.Signing.PubKey), fleet, p.Path(p.Encrypt.RecipientsFile))
+	if err != nil {
+		return err
+	}
+	for _, f := range dropped {
+		if rel, err := filepath.Rel(p.Path("."), f); err == nil {
+			f = rel
+		}
+		fmt.Printf("replacing:     %s (its secret key isn't here, so it came with a cloned project)\n", f)
+	}
 	if err := keys.GenerateSigning(p.Path(p.Signing.Key), p.Path(p.Signing.PubKey)); err != nil {
 		return err
 	}
 	fmt.Printf("signing key:   %s (keep secret; CI can pass it in RAMEKIN_SIGNING_KEY)\n", p.Signing.Key)
 	fmt.Printf("verify key:    %s (installed on devices)\n", p.Signing.PubKey)
-	fleet := p.Path("keys/fleet.agekey")
 	rcpt, err := keys.GenerateAge(fleet)
 	if err != nil {
 		return err
@@ -315,4 +325,27 @@ command (such as: exec /usr/bin/app --flag "$@"), add a shell to the image,
 or run the app directly with
   ramekin device set <device> --command "/path/to/app --flags"
 `, filepath.Base(sif), err)
+}
+
+// dropCopiedKeys removes public key files whose secret half is absent. A
+// project cloned from someone else's repository carries their committed
+// verify key and recipients but not their secret keys; those files must go
+// before `ramekin keys generate` writes the new owner's keys. It returns the
+// paths it removed.
+func dropCopiedKeys(signKey, signPub, fleetKey, recipients string) ([]string, error) {
+	var dropped []string
+	for _, pair := range [][2]string{{signKey, signPub}, {fleetKey, recipients}} {
+		if _, err := os.Stat(pair[0]); !errors.Is(err, os.ErrNotExist) {
+			if err != nil {
+				return dropped, err
+			}
+			continue
+		}
+		if err := os.Remove(pair[1]); err == nil {
+			dropped = append(dropped, pair[1])
+		} else if !errors.Is(err, os.ErrNotExist) {
+			return dropped, err
+		}
+	}
+	return dropped, nil
 }
