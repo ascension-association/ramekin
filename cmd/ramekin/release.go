@@ -175,7 +175,17 @@ func cmdPublish(ctx context.Context, args []string) error {
 	}
 
 	// 5. Point the channel at it.
-	return pointChannel(ctx, gh, signer, m, p.Name, *channel)
+	if err := pointChannel(ctx, gh, signer, m, p.Name, *channel); err != nil {
+		return err
+	}
+
+	// 6. Now there is something to watch for new CVEs.
+	if added, err := addWatchWorkflow(p); err != nil {
+		fmt.Fprintf(os.Stderr, "warning: adding %s: %v\n", watchWorkflow, err)
+	} else if added {
+		fmt.Printf("created %s: it rescans published releases daily for new CVEs.\n  Commit it with %s, which it needs to verify releases.\n", watchWorkflow, p.Signing.PubKey)
+	}
+	return nil
 }
 
 func cmdPromote(ctx context.Context, args []string) error {
@@ -303,6 +313,10 @@ func cmdWatch(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	if p.Releases.GitHub == "" {
+		fmt.Println("nothing to watch: releases.github isn't set in ramekin.yaml, so no releases are published")
+		return nil
+	}
 	gh, err := githubClient(p, false)
 	if err != nil {
 		return err
@@ -369,6 +383,9 @@ func watchOnce(ctx context.Context, p *config.Project, gh *release.GitHub, v sig
 				fmt.Fprintf(os.Stderr, "warning: %v\n", err)
 			}
 		}
+	}
+	if len(seen) == 0 {
+		fmt.Printf("nothing to watch: no release is published on channels %s\n", strings.Join(p.Channels, ", "))
 	}
 	return total, nil
 }

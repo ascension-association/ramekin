@@ -966,7 +966,7 @@ It accepts what sh would do with one command line: quoting, `$VAR` and `${VAR:-d
 
 - `ramekin build`, `push` and `scan` generate an SBOM (syft) and match it with grype.
 - `publish` uses the scan as a release gate and stores the SBOM next to the release.
-- `ramekin watch` rescans the SBOMs of everything currently on a channel against today's vulnerability data, so CVEs disclosed after release still raise alerts. `ramekin init` adds a daily GitHub Actions workflow for it. `ramekin watch --interval 24h` also works as a long-running job.
+- `ramekin watch` rescans the SBOMs of everything currently on a channel against today's vulnerability data, so CVEs disclosed after release still raise alerts. The first `ramekin publish` adds a daily GitHub Actions workflow for it, `.github/workflows/ramekin-cve-watch.yml`; commit it with `keys/ramekin-sign.pub`, which it needs to verify releases. Without published releases, `ramekin watch` has nothing to scan and exits successfully. `ramekin watch --interval 24h` also works as a long-running job.
 - Findings at or above `alerts.min_severity` are POSTed to `alerts.webhook`. The JSON body carries `text` (Slack, Mattermost), `content` (Discord) and structured `findings`.
 
 </details>
