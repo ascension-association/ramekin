@@ -16,6 +16,14 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 
 For how Ramekin compares with Mender, balena, RAUC, Talos and similar tools, see [ALTERNATIVES.md](ALTERNATIVES.md).
 
+## Get started
+
+The [Quick start](https://github.com/ascension-association/ramekin/wiki/Quick-start) takes a [NanoPi R76S](https://www.friendlyelec.com/index.php?route=product/product&product_id=303) from out of the box to running your first app in about 10 minutes. You need a Linux computer with [Go](https://go.dev/dl/) and [Apptainer](https://apptainer.org/docs/admin/main/installation.html), then install the CLI:
+
+```sh
+go install github.com/ascension-association/ramekin/cmd/ramekin@latest
+```
+
 ## Fleet dashboard
 
 `ramekin --dashboard` opens a web page showing every device in the project's `.ramekin/devices`. It refreshes every 5 seconds.
@@ -43,98 +51,12 @@ The dashboard is read-only apart from switching versions. It has no remote shell
 
 The dashboard reaches devices over the local network, the same way `ramekin status` does. If a device's address changes and its MAC is known, the dashboard searches for it at most every 2 minutes. Devices need a ramekind that reports health and resource use. For an older one, the dashboard shows a warning and you should run `ramekin device update <device>`. Devices you can't reach directly can still report to a webhook with `--status-url`, and the report includes the same health and resource data.
 
-## Quick start: Hello World on a NanoPi R76S
-
-Take a [NanoPi R76S](https://www.friendlyelec.com/index.php?route=product/product&product_id=303) out of the box, flash it, run your first app on it, then change the app. It takes about 10 minutes.
-
-**You need:**
-- the R76S, connected to your network, with a screen on its HDMI port;
-- a microSD card of 2 GB or more;
-- on your Linux computer: [Go](https://go.dev/dl/) and [Apptainer](https://apptainer.org/docs/admin/main/installation.html).
-
-**1. Install the CLI.**
-
-```sh
-go install github.com/ascension-association/ramekin/cmd/ramekin@latest
-```
-
-**2. Flash the firmware.** Download the [official R76S firmware](https://github.com/ascension-association/firmware.r76s) and write it to the card. Replace `/dev/sdX` with your card; this erases it.
-
-```sh
-curl -LO https://github.com/ascension-association/firmware.r76s/releases/latest/download/r76s.img.gz
-gunzip -c r76s.img.gz | sudo dd of=/dev/sdX bs=4M conv=fsync status=progress
-```
-
-Put the card in the R76S and power it on. After about a minute, its screen shows a pairing code. Leave it running while you create the project.
-
-**3. Create a project on your Linux computer.** Run this and the remaining steps there, not on the R76S: the device only runs what you push to it. `ramekin init` starts you with a placeholder app, `app.sh`: every 10 seconds it prints "Hello" in large letters with [figlet](http://www.figlet.org/), then the device's name. Replace it with any app, in any language, new or existing: the examples under [Learn more](#learn-more) serve a web page with nginx, run a Go web app with a database, and build an app interactively. `example.def` packages the app into a container: it starts from [Wolfi](https://github.com/wolfi-dev), adds the `figlet` package, and comes to about 6 MiB with no known vulnerabilities.
-
-```sh
-ramekin init example && cd example
-ramekin keys generate
-```
-
-**4. Claim the device.** Its screen now shows **Pairing code 123456**. This command finds the R76S on your network and asks for that code: type the 6 digits. Or pass it directly: `ramekin device claim example --code 123456`. The code proves you have the device in hand, and once claimed, the device trusts only your project's key. The device picks a new code each time it starts, so use the one on the screen now.
-
-```sh
-ramekin device claim example
-```
-
-**5. Build the app and push it to the device.**
-
-```sh
-ramekin build --no-scan
-ramekin push example --no-scan
-ramekin logs example -f
-```
-
-```
- _   _      _ _
-| | | | ___| | | ___
-| |_| |/ _ \ | |/ _ \
-|  _  |  __/ | | (_) |
-|_| |_|\___|_|_|\___/
-
-from example
-```
-
-**6. Change it and push again.**
-
-```sh
-sed -i 's/figlet "Hello"/figlet "Hello World"/' app.sh
-ramekin build --no-scan && ramekin push example --no-scan
-ramekin logs example -f
-```
-
-```
- _   _      _ _        __        __         _     _
-| | | | ___| | | ___   \ \      / /__  _ __| | __| |
-| |_| |/ _ \ | |/ _ \   \ \ /\ / / _ \| '__| |/ _` |
-|  _  |  __/ | | (_) |   \ V  V / (_) | |  | | (_| |
-|_| |_|\___|_|_|\___/     \_/\_/ \___/|_|  |_|\__,_|
-
-from example
-```
-
-This project is in [ramekin-app-example](https://github.com/ascension-association/ramekin-app-example).
-
-The device keeps its firmware up to date from the official firmware's channel. A firmware update restarts the device more than once, so expect your app to be briefly unavailable a few times while it installs. A new app version runs only after it starts cleanly; otherwise the device goes back to the previous one.
-
-**7. Optional: run without the SD card.** If your R76S has eMMC storage, install onto it. The device keeps its identity and app, then powers off; remove the card and power it on.
-
-```sh
-ramekin device install example --to emmc      # add --overwrite to erase an OS already on the eMMC
-```
-
-**Next:**
-- **Scan for vulnerabilities:** install [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), then drop `--no-scan`.
-- **Ship to a fleet:** publish releases that every device installs itself (see [Ship to a fleet of devices](https://github.com/ascension-association/ramekin/wiki/Ship-to-a-fleet-of-devices)).
-- **Watch devices:** `ramekin --dashboard` shows every device.
-- **Other boards and techniques:** see the examples under Learn more.
-
 ## Learn more
 
 Guides and reference live in the [wiki](https://github.com/ascension-association/ramekin/wiki). You don't need any of them to get started.
+
+**Getting started**
+- [Quick start](https://github.com/ascension-association/ramekin/wiki/Quick-start)
 
 **Examples**
 - [Web Page Example](https://github.com/ascension-association/ramekin/wiki/Web-Page-Example)
