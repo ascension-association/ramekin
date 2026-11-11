@@ -28,6 +28,8 @@ go install github.com/anchore/grype/cmd/grype@latest
 
 `ramekin build` and `ramekin push` stop with an error if either scanner is missing. `--no-scan` skips the scan, but don't use it for anything you ship: the scan is what keeps known vulnerabilities off your devices.
 
+To update later, run `ramekin update`. `ramekin version` shows which version you have, and other commands mention it when a newer release is out.
+
 ## Fleet dashboard
 
 `ramekin --dashboard` opens a web page showing every device in the project's `.ramekin/devices`. It refreshes every 5 seconds.
