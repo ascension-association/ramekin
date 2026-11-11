@@ -11,7 +11,7 @@ Ramekin turns a small board (a Raspberry Pi, a mini PC, or similar) into an appl
 
 - **Safe updates.** A new version must prove it's healthy before it replaces the old one. If it doesn't, the device rolls back on its own.
 - **Secure by default.** Every image is signed and scanned for known vulnerabilities, and fleet releases are encrypted.
-- **Tiny devices.** Built on [gokrazy](https://gokrazy.org): no shell or package manager in the device's OS, just your app and one small agent. Your app's container holds only what you put in it, which can be just the app, with no shell either.
+- **Tiny devices.** Built on [gokrazy](https://gokrazy.org), a read-only OS with only 4 executables – init, ntp, dhcp, and randomd – no shell, package manager, or [vulnerable bloat](https://cloud.google.com/blog/topics/threat-intelligence/vulnerability-discovery-and-exploitation-trends-in-the-ai-era), just the OS, `ramekind` daemon, a lock screen utility, and your app container! Your app's container holds only what you put in it.
 - **Simple tooling.** Describe your app in an [Apptainer](https://apptainer.org) definition file (a Dockerfile converts in minutes), or build it interactively in a shell. Apptainer is the only container tool you need.
 
 For how Ramekin compares with Mender, balena, RAUC, Talos and similar tools, see [ALTERNATIVES.md](ALTERNATIVES.md).
