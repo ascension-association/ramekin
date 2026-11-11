@@ -46,11 +46,10 @@ type fleetDevice struct {
 	// Verified is set when the device's answer was signed with the key it
 	// was claimed with.
 	Verified bool `json:"verified"` // an action in progress, e.g. "switching to 1.2.0"
-	// GokrazyURL is the device's gokrazy web interface, set only when it has
-	// a network password; GokrazyLogin says where that password is (never
-	// the password itself).
-	GokrazyURL   string `json:"gokrazy_url,omitempty"`
-	GokrazyLogin string `json:"gokrazy_login,omitempty"`
+	// Gokrazy says the GK button can open the device's gokrazy dashboard;
+	// GokrazyNote says how, or why not. Passwords never go to the page.
+	Gokrazy     bool   `json:"gokrazy"`
+	GokrazyNote string `json:"gokrazy_note,omitempty"`
 }
 
 type console struct {
@@ -60,6 +59,9 @@ type console struct {
 	mu       sync.Mutex
 	devices  map[string]*fleetDevice
 	searched map[string]time.Time // last MAC search per device
+
+	listenHost string                // where the dashboard listens; GK sessions use it too
+	gk         map[string]*gkSession // open gokrazy dashboards, by device
 }
 
 func cmdDashboard(ctx context.Context, args []string) error {
@@ -81,10 +83,12 @@ func cmdDashboard(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
+	c.listenHost, _, _ = net.SplitHostPort(ln.Addr().String())
 	srv := &http.Server{Handler: c.handler(ln.Addr().String()), ReadHeaderTimeout: 10 * time.Second}
 	go func() {
 		<-ctx.Done()
 		srv.Close()
+		c.closeGokrazy()
 	}()
 	go c.pollLoop(ctx)
 
@@ -143,6 +147,7 @@ func (c *console) handler(addr string) http.Handler {
 		writeConsoleJSON(w, http.StatusOK, map[string]any{"project": c.p.Name, "interval_seconds": pollInterval.Seconds(), "devices": c.snapshot()})
 	})
 	mux.HandleFunc("POST /api/devices/{name}/switch", c.switchVersion)
+	mux.HandleFunc("POST /api/devices/{name}/gokrazy", c.openGokrazy)
 	mux.HandleFunc("GET /api/devices/{name}/logs", c.logs)
 	return c.guard(addr, mux)
 }
@@ -239,7 +244,6 @@ func (c *console) poll(ctx context.Context, name string) {
 			row.URL = d.URL // locate may have found it at a new address
 		}
 	}
-	row.GokrazyURL, row.GokrazyLogin = gokrazyDashboard(c.p, d)
 	if err != nil {
 		row.Health, row.Detail = "offline", err.Error()
 		if strings.Contains(err.Error(), "identity check failed") {
@@ -254,35 +258,12 @@ func (c *console) poll(ctx context.Context, name string) {
 			row.Status, row.Seen = old.Status, old.Seen // keep the last report on screen
 		}
 	}
+	var features []string
+	if row.Status != nil {
+		features = row.Status.Features
+	}
+	row.Gokrazy, row.GokrazyNote = gokrazyInfo(c.p, d, features)
 	c.devices[name] = &row
-}
-
-// gokrazyDashboard returns the address of a device's gokrazy web interface
-// and where its password is kept. A device with no network password (official
-// firmware) serves the interface only to itself, so it gets no address.
-func gokrazyDashboard(p *config.Project, d deviceRecord) (addr, login string) {
-	host, _, err := d.hostPort()
-	if err != nil || host == "" {
-		return "", ""
-	}
-	inst := instanceUpdate(d.name)
-	switch {
-	case d.GokrazyPassword != "":
-		rel, err := filepath.Rel(p.Dir, deviceRecordPath(p, d.name))
-		if err != nil {
-			rel = deviceRecordPath(p, d.name)
-		}
-		login = "log in as gokrazy with gokrazy_password from " + rel
-	case inst.HTTPPassword != "":
-		login = "log in as gokrazy with Update.HTTPPassword from " + instanceConfigPath(d.name)
-	default:
-		return "", ""
-	}
-	port := dashboardPort
-	if inst.HTTPPort != "" {
-		port = inst.HTTPPort // an adopted instance can keep its own port
-	}
-	return "http://" + net.JoinHostPort(host, port) + "/", login
 }
 
 // fetchStatus asks a device for its status. If it doesn't answer and its MAC

@@ -46,6 +46,9 @@ type API struct {
 	Release *Releaser
 	// Install serves POST /v1/install; nil disables it.
 	Install *Installer
+	// Gokrazy serves gokrazy's web interface under /v1/gokrazy/; nil
+	// disables it.
+	Gokrazy http.Handler
 }
 
 // SettingsStore holds a device's project settings. On official firmware they
@@ -103,6 +106,9 @@ func (a *API) Handler() http.Handler {
 		a.Sup.ClearBad()
 		w.WriteHeader(http.StatusNoContent)
 	})
+	if a.Gokrazy != nil {
+		mux.Handle(GokrazyPrefix+"/", a.Gokrazy)
+	}
 	authed := a.auth(mux)
 	if a.Claim == nil {
 		return authed
@@ -139,6 +145,9 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.Nonce = r.URL.Query().Get("nonce")
+	if a.Gokrazy != nil {
+		s.Features = append(s.Features, FeatureGokrazy)
+	}
 	a.writeJSON(w, http.StatusOK, s)
 }
 

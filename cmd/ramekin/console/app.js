@@ -181,9 +181,7 @@ function card(d) {
       if (failed.length) facts.push(["Firmware that failed", failed.join(", ")]);
     }
   }
-  facts.push(["gokrazy dashboard", d.gokrazy_url
-    ? `${d.gokrazy_url} (${d.gokrazy_login})`
-    : "only on the device itself: it has no gokrazy network password (official firmware works this way)"]);
+  if (d.gokrazy_note) facts.push(["gokrazy dashboard", d.gokrazy_note]);
   facts.push(["Identity", d.verified ? "verified (signed by its claimed key)" : "not claimed"]);
   facts.push(["API", d.url || "—"]);
   facts.push([offline ? "Last answered" : "Polled", offline ? ago(d.seen) : ago(d.polled)]);
@@ -216,10 +214,11 @@ function card(d) {
             "aria-label": `Show ${d.name}'s logs`,
             onclick: () => (showing ? closeLogs() : openLogs(d.name)),
           }, "Logs"),
-          d.gokrazy_url && /^http:\/\//.test(d.gokrazy_url) && el("a", {
-            class: "button-link", href: d.gokrazy_url, target: "_blank", rel: "noopener noreferrer",
-            title: `gokrazy dashboard: ${d.gokrazy_login}`,
+          d.gokrazy && el("button", {
+            class: "logs-btn", type: "button",
+            title: `gokrazy dashboard: ${d.gokrazy_note}`,
             "aria-label": `Open ${d.name}'s gokrazy dashboard (new tab)`,
+            onclick: () => openGokrazy(d.name),
           }, "GK")))),
     d.detail && el("p", { class: "detail" }, d.detail),
     st ? versions(d, st, offline, busy) : el("p", { class: "nodata" }, "No release information yet."),
@@ -363,6 +362,26 @@ $("logs-close").addEventListener("click", closeLogs);
 $("logs-clear").addEventListener("click", () => $("logs-body").replaceChildren());
 $("logs-reconnect").addEventListener("click", () => logs && openLogs(logs.name));
 $("logs").addEventListener("keydown", (e) => { if (e.key === "Escape") closeLogs(); });
+
+// GK: the console opens the device's gokrazy dashboard on a loopback port of
+// its own and logs in there, so no password reaches this page. The tab is
+// opened right away (browsers block pop-ups opened after a delay), then sent
+// to the one-time login link once the console has it.
+async function openGokrazy(name) {
+  const tab = window.open("about:blank", "_blank");
+  if (tab) tab.opener = null; // the gokrazy page can't reach back into this one
+  try {
+    const res = await api(`/api/devices/${encodeURIComponent(name)}/gokrazy`, { method: "POST" });
+    if (!res.ok) throw new Error(res.error);
+    if (!/^http:\/\//.test(res.url)) throw new Error("unexpected address " + res.url);
+    if (tab) tab.location.replace(res.url);
+    else window.open(res.url, "_blank", "noopener");
+  } catch (e) {
+    if (tab) tab.close();
+    messages.set(name, { ok: false, text: `Couldn't open ${name}'s gokrazy dashboard: ${e.message}` });
+    render();
+  }
+}
 
 async function loop() {
   await refresh();

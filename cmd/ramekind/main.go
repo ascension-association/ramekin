@@ -251,6 +251,7 @@ func main() {
 	api := &agent.API{
 		Sup: sup, Upd: upd, Logs: logs, Metrics: metrics, Token: token, Device: name,
 		Sign: sign, Claim: claimer, Firmware: fw, Verifier: fwVerifier,
+		Gokrazy: agent.NewGokrazyProxy(),
 		Settings: &agent.SettingsStore{
 			Current: cfg.Settings(), FromDevice: settingsFromDevice, Verifier: verifier,
 			Save:    func(s config.Settings) error { return saveSettings(settingsPath, s) },

@@ -216,6 +216,9 @@ type DeviceStatus struct {
 	Firmware  *FirmwareStatus `json:"firmware,omitempty"`
 	Disks     []Disk          `json:"disks,omitempty"`
 	Reported  time.Time       `json:"reported"`
+	// Features lists optional API endpoints this ramekind serves, so the
+	// workstation knows what an older device can't do.
+	Features []string `json:"features,omitempty"`
 	// Nonce echoes the workstation's nonce, binding a signed answer to its request.
 	Nonce string `json:"nonce,omitempty"`
 }
