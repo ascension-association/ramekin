@@ -25,5 +25,17 @@
     <p>The console shows the devices in this project's <code>.ramekin/devices</code>. Create one with <code>ramekin device init &lt;name&gt;</code>.</p>
   </div>
 </main>
+<section class="logs" id="logs" hidden aria-labelledby="logs-title">
+  <div class="logs-head">
+    <h2 id="logs-title">Logs</h2>
+    <span class="logs-state" id="logs-state" role="status"></span>
+    <div class="logs-actions">
+      <button type="button" id="logs-reconnect" hidden>Reconnect</button>
+      <button type="button" id="logs-clear">Clear</button>
+      <button type="button" id="logs-close">Close</button>
+    </div>
+  </div>
+  <div class="logs-body" id="logs-body" role="log" aria-live="off" tabindex="0"></div>
+</section>
 </body>
 </html>

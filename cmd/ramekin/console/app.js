@@ -200,10 +200,17 @@ function card(d) {
   const msg = messages.get(d.name);
   if (msg && !busy) actions.append(el("p", { class: "msg " + (msg.ok ? "ok" : "err"), role: "status" }, msg.text));
 
+  const showing = logs && logs.name === d.name;
   return el("article", { class: "card h-" + d.health + (offline ? " offline" : ""), "aria-label": d.name },
     el("div", { class: "head" },
       el("div", {}, el("h2", { class: "name" }, d.name), el("div", { class: "where" }, st && st.channel ? "channel " + st.channel : "development device")),
-      badge(d.health)),
+      el("div", { class: "head-right" },
+        badge(d.health),
+        el("button", {
+          class: "logs-btn", type: "button", "aria-pressed": String(!!showing),
+          "aria-label": `Show ${d.name}'s logs`,
+          onclick: () => (showing ? closeLogs() : openLogs(d.name)),
+        }, "Logs"))),
     d.detail && el("p", { class: "detail" }, d.detail),
     st ? versions(d, st, offline, busy) : el("p", { class: "nodata" }, "No release information yet."),
     meters,
@@ -273,6 +280,79 @@ async function switchTo(name, r) {
   pending.delete(name);
   await refresh();
 }
+
+// Live logs: one device at a time, in a panel outside the cards so the
+// 5-second refresh doesn't reset it. Log lines come from the device's app,
+// so they are only ever inserted as text.
+const MAX_LOG_LINES = 2000;
+const ANSI = /\x1b\[[0-9;?]*[ -\/]*[@-~]/g; // colors and cursor moves
+let logs = null; // {name, ctrl}
+
+function setLogState(text, err = false) {
+  $("logs-state").textContent = text;
+  $("logs-state").classList.toggle("err", err);
+}
+
+function appendLogLines(lines) {
+  const body = $("logs-body");
+  const atBottom = body.scrollHeight - body.scrollTop - body.clientHeight < 24;
+  const frag = document.createDocumentFragment();
+  for (const l of lines) frag.append(el("div", { class: "line" }, l.replace(ANSI, "").replace(/\r$/, "")));
+  body.append(frag);
+  while (body.childElementCount > MAX_LOG_LINES) body.firstChild.remove();
+  if (atBottom) body.scrollTop = body.scrollHeight; // follow, unless the viewer scrolled up
+}
+
+async function streamLogs(name, ctrl) {
+  setLogState("Connecting…");
+  $("logs-reconnect").hidden = true;
+  let partial = "";
+  try {
+    const r = await fetch(`/api/devices/${encodeURIComponent(name)}/logs`, { headers: { "X-Ramekin-Console": key }, signal: ctrl.signal });
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    setLogState("Following");
+    const reader = r.body.pipeThrough(new TextDecoderStream()).getReader();
+    for (;;) {
+      const { value, done } = await reader.read();
+      if (done) break;
+      const parts = (partial + value).split("\n");
+      partial = parts.pop();
+      if (parts.length) appendLogLines(parts);
+    }
+    if (partial) appendLogLines([partial]);
+    setLogState("The device closed the log stream.", true);
+  } catch (e) {
+    if (ctrl.signal.aborted) return;
+    setLogState("Disconnected: " + e.message, true);
+  }
+  if (!ctrl.signal.aborted) $("logs-reconnect").hidden = false;
+}
+
+// Opening (or reconnecting) starts fresh: the device replays its recent lines first.
+function openLogs(name) {
+  if (logs) logs.ctrl.abort();
+  logs = { name, ctrl: new AbortController() };
+  $("logs-title").textContent = "Logs · " + name;
+  $("logs-body").replaceChildren();
+  $("logs").hidden = false;
+  document.body.classList.add("logs-open");
+  render();
+  streamLogs(name, logs.ctrl);
+}
+
+function closeLogs() {
+  if (!logs) return;
+  logs.ctrl.abort();
+  logs = null;
+  $("logs").hidden = true;
+  document.body.classList.remove("logs-open");
+  render();
+}
+
+$("logs-close").addEventListener("click", closeLogs);
+$("logs-clear").addEventListener("click", () => $("logs-body").replaceChildren());
+$("logs-reconnect").addEventListener("click", () => logs && openLogs(logs.name));
+$("logs").addEventListener("keydown", (e) => { if (e.key === "Escape") closeLogs(); });
 
 async function loop() {
   await refresh();

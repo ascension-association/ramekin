@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"html/template"
+	"io"
 	"io/fs"
 	"net"
 	"net/http"
@@ -137,6 +138,7 @@ func (c *console) handler(addr string) http.Handler {
 		writeConsoleJSON(w, http.StatusOK, map[string]any{"project": c.p.Name, "interval_seconds": pollInterval.Seconds(), "devices": c.snapshot()})
 	})
 	mux.HandleFunc("POST /api/devices/{name}/switch", c.switchVersion)
+	mux.HandleFunc("GET /api/devices/{name}/logs", c.logs)
 	return c.guard(addr, mux)
 }
 
@@ -298,6 +300,54 @@ func classify(st *agent.DeviceStatus) (health, detail string) {
 		return "warning", fmt.Sprintf("app restarted %d times (last exit: %s)", st.App.Restarts, st.App.LastExit)
 	}
 	return "healthy", ""
+}
+
+// logs relays a device's log stream (`ramekin logs -f`) to the page: its
+// recent lines, then new ones as they come, until the page stops reading.
+// The device token stays here; the page only sees the log text.
+func (c *console) logs(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	if !slices.Contains(deviceNames(c.p), name) {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	d, err := resolveDevice(c.p, name)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	resp, err := d.do(r.Context(), http.MethodGet, "/v1/logs?follow=1", nil, 0)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadGateway)
+		return
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(io.LimitReader(resp.Body, 4096))
+		http.Error(w, fmt.Sprintf("%s answered %s: %s", name, resp.Status, strings.TrimSpace(string(b))), http.StatusBadGateway)
+		return
+	}
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	fl, _ := w.(http.Flusher)
+	if fl != nil {
+		fl.Flush() // send the headers now, so the page shows it's connected before the first line
+	}
+	buf := make([]byte, 32<<10)
+	for {
+		n, err := resp.Body.Read(buf)
+		if n > 0 {
+			if _, werr := w.Write(buf[:n]); werr != nil {
+				return
+			}
+			if fl != nil {
+				fl.Flush()
+			}
+		}
+		if err != nil {
+			return
+		}
+	}
 }
 
 // switchVersion moves a device to one of its kept releases (?sha=, with

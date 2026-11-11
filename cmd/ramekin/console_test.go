@@ -1,10 +1,17 @@
 package main
 
 import (
+	"bufio"
+	"context"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
+	"sync"
 	"testing"
+	"time"
 
 	"github.com/ascension-association/ramekin/internal/agent"
 	"github.com/ascension-association/ramekin/internal/config"
@@ -75,4 +82,114 @@ func TestConsoleGuard(t *testing.T) {
 	if loopbackOnly("localhost:1") != nil || loopbackOnly("[::1]:1") != nil {
 		t.Error("loopback refused")
 	}
+}
+
+// TestConsoleLogs relays a device's log stream, live, with the device token
+// added by the console. The page hears it's connected before the first line,
+// and the console stops reading from the device when the page does.
+func TestConsoleLogs(t *testing.T) {
+	backlog, live, closed := make(chan struct{}), make(chan struct{}), make(chan struct{})
+	var once1, once2 sync.Once
+	sendBacklog := func() { once1.Do(func() { close(backlog) }) }
+	sendLive := func() { once2.Do(func() { close(live) }) }
+	dev := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v1/logs" || r.URL.Query().Get("follow") != "1" {
+			http.Error(w, "unexpected request "+r.URL.String(), http.StatusBadRequest)
+			return
+		}
+		if r.Header.Get("Authorization") != "Bearer secret" {
+			http.Error(w, "bad token", http.StatusUnauthorized)
+			return
+		}
+		w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+		w.(http.Flusher).Flush() // like ramekind: headers first, even with nothing logged yet
+		for _, step := range []struct {
+			gate chan struct{}
+			line string
+		}{{backlog, "backlog line\n"}, {live, "live line\n"}} {
+			select {
+			case <-step.gate:
+			case <-r.Context().Done():
+				close(closed)
+				return
+			}
+			io.WriteString(w, step.line)
+			w.(http.Flusher).Flush()
+		}
+		<-r.Context().Done()
+		close(closed)
+	}))
+	defer dev.Close()
+
+	p := &config.Project{Name: "demo", Dir: t.TempDir()}
+	rec := deviceRecordPath(p, "pi")
+	if err := os.MkdirAll(filepath.Dir(rec), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.WriteFile(rec, []byte(`{"url": "`+dev.URL+`", "token": "secret"}`), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	c := &console{p: p, key: "k", devices: map[string]*fleetDevice{}, searched: map[string]time.Time{}}
+	srv := httptest.NewUnstartedServer(nil)
+	srv.Config.Handler = c.handler(srv.Listener.Addr().String())
+	srv.Start()
+	defer srv.Close()
+	// Runs before the servers close, so a failed test can't leave them waiting.
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	defer sendLive()
+	defer sendBacklog()
+
+	within := func(what string, f func()) {
+		done := make(chan struct{})
+		go func() { f(); close(done) }()
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatalf("timed out waiting for %s", what)
+		}
+	}
+	get := func(path, key string) (resp *http.Response) {
+		req, _ := http.NewRequestWithContext(ctx, "GET", srv.URL+path, nil)
+		if key != "" {
+			req.Header.Set("X-Ramekin-Console", key)
+		}
+		var err error
+		within("the response headers", func() { resp, err = http.DefaultClient.Do(req) })
+		if err != nil {
+			t.Fatal(err)
+		}
+		return resp
+	}
+	if resp := get("/api/devices/pi/logs", ""); resp.StatusCode != http.StatusForbidden {
+		t.Fatalf("logs without key: %d", resp.StatusCode)
+	}
+	if resp := get("/api/devices/nope/logs", "k"); resp.StatusCode != http.StatusNotFound {
+		t.Fatalf("unknown device: %d", resp.StatusCode)
+	}
+
+	resp := get("/api/devices/pi/logs", "k") // before the device has logged anything
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		b, _ := io.ReadAll(resp.Body)
+		t.Fatalf("logs: %d %s", resp.StatusCode, b)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/plain") {
+		t.Fatalf("content type %q", ct)
+	}
+	br := bufio.NewReader(resp.Body)
+	readLine := func() (l string) {
+		within("a log line", func() { l, _ = br.ReadString('\n') })
+		return l
+	}
+	sendBacklog()
+	if l := readLine(); l != "backlog line\n" {
+		t.Fatalf("first line %q", l)
+	}
+	sendLive()
+	if l := readLine(); l != "live line\n" {
+		t.Fatalf("second line %q", l)
+	}
+	resp.Body.Close()
+	within("the device's stream to close after the page stopped reading", func() { <-closed })
 }
