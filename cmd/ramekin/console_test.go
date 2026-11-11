@@ -193,3 +193,49 @@ func TestConsoleLogs(t *testing.T) {
 	resp.Body.Close()
 	within("the device's stream to close after the page stopped reading", func() { <-closed })
 }
+
+// TestGokrazyDashboard links a device's gokrazy web interface only when it has
+// a network password, and says where the password is without revealing it.
+func TestGokrazyDashboard(t *testing.T) {
+	t.Setenv("HOME", t.TempDir())
+	p := &config.Project{Name: "demo", Dir: t.TempDir()}
+	instance := func(name, cfg string) {
+		path := instanceConfigPath(name)
+		if err := os.MkdirAll(filepath.Dir(path), 0o700); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(path, []byte(cfg), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	instance("dev", `{"Update": {"HTTPPassword": "instpw", "HTTPPort": "9000"}}`)
+	instance("both", `{"Update": {"HTTPPort": "9001"}}`)
+	for _, c := range []struct {
+		d         deviceRecord
+		url, from string
+	}{
+		{deviceRecord{name: "fleet", URL: "http://192.168.1.20:8095", GokrazyPassword: "recpw"}, "http://192.168.1.20:8181/", filepath.Join(".ramekin", "devices", "fleet.json")},
+		{deviceRecord{name: "dev", URL: "http://pi.lan:8095"}, "http://pi.lan:9000/", instanceConfigPath("dev")},
+		{deviceRecord{name: "both", URL: "http://[fd00::5]:8095", GokrazyPassword: "recpw"}, "http://[fd00::5]:9001/", filepath.Join(".ramekin", "devices", "both.json")},
+		{deviceRecord{name: "official", URL: "http://192.168.1.30:8095"}, "", ""}, // no network password
+	} {
+		u, login := gokrazyDashboard(p, c.d)
+		if u != c.url {
+			t.Errorf("%s: url %q, want %q", c.d.name, u, c.url)
+		}
+		if c.url == "" {
+			if login != "" {
+				t.Errorf("%s: login hint %q without a url", c.d.name, login)
+			}
+			continue
+		}
+		if !strings.Contains(login, c.from) {
+			t.Errorf("%s: login hint %q should name %s", c.d.name, login, c.from)
+		}
+		for _, secret := range []string{"recpw", "instpw"} {
+			if strings.Contains(login, secret) {
+				t.Errorf("%s: login hint reveals the password: %q", c.d.name, login)
+			}
+		}
+	}
+}

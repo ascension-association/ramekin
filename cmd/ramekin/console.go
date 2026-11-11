@@ -46,6 +46,11 @@ type fleetDevice struct {
 	// Verified is set when the device's answer was signed with the key it
 	// was claimed with.
 	Verified bool `json:"verified"` // an action in progress, e.g. "switching to 1.2.0"
+	// GokrazyURL is the device's gokrazy web interface, set only when it has
+	// a network password; GokrazyLogin says where that password is (never
+	// the password itself).
+	GokrazyURL   string `json:"gokrazy_url,omitempty"`
+	GokrazyLogin string `json:"gokrazy_login,omitempty"`
 }
 
 type console struct {
@@ -234,6 +239,7 @@ func (c *console) poll(ctx context.Context, name string) {
 			row.URL = d.URL // locate may have found it at a new address
 		}
 	}
+	row.GokrazyURL, row.GokrazyLogin = gokrazyDashboard(c.p, d)
 	if err != nil {
 		row.Health, row.Detail = "offline", err.Error()
 		if strings.Contains(err.Error(), "identity check failed") {
@@ -249,6 +255,34 @@ func (c *console) poll(ctx context.Context, name string) {
 		}
 	}
 	c.devices[name] = &row
+}
+
+// gokrazyDashboard returns the address of a device's gokrazy web interface
+// and where its password is kept. A device with no network password (official
+// firmware) serves the interface only to itself, so it gets no address.
+func gokrazyDashboard(p *config.Project, d deviceRecord) (addr, login string) {
+	host, _, err := d.hostPort()
+	if err != nil || host == "" {
+		return "", ""
+	}
+	inst := instanceUpdate(d.name)
+	switch {
+	case d.GokrazyPassword != "":
+		rel, err := filepath.Rel(p.Dir, deviceRecordPath(p, d.name))
+		if err != nil {
+			rel = deviceRecordPath(p, d.name)
+		}
+		login = "log in as gokrazy with gokrazy_password from " + rel
+	case inst.HTTPPassword != "":
+		login = "log in as gokrazy with Update.HTTPPassword from " + instanceConfigPath(d.name)
+	default:
+		return "", ""
+	}
+	port := dashboardPort
+	if inst.HTTPPort != "" {
+		port = inst.HTTPPort // an adopted instance can keep its own port
+	}
+	return "http://" + net.JoinHostPort(host, port) + "/", login
 }
 
 // fetchStatus asks a device for its status. If it doesn't answer and its MAC

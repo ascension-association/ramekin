@@ -228,13 +228,28 @@ func claimInfo(ctx context.Context, url string) (*agent.ClaimInfo, error) {
 // instancePassword returns the gokrazy password of a device built for one
 // board, from its gokrazy instance.
 func instancePassword(name string) string {
-	b, err := os.ReadFile(filepath.Join(gokrazyDir(""), name, "config.json"))
+	return instanceUpdate(name).HTTPPassword
+}
+
+// instanceConfigPath is the gokrazy instance config for a device made with
+// `ramekin device init`.
+func instanceConfigPath(name string) string {
+	return filepath.Join(gokrazyDir(""), name, "config.json")
+}
+
+// instanceUpdate reads the Update section of a device's gokrazy instance
+// config: its web interface password and port. Both are empty if the device
+// has no instance here (official firmware, or another workstation).
+func instanceUpdate(name string) (u struct{ HTTPPassword, HTTPPort string }) {
+	b, err := os.ReadFile(instanceConfigPath(name))
 	if err != nil {
-		return ""
+		return u
 	}
-	var cfg struct{ Update struct{ HTTPPassword string } }
+	var cfg struct {
+		Update struct{ HTTPPassword, HTTPPort string }
+	}
 	json.Unmarshal(b, &cfg)
-	return cfg.Update.HTTPPassword
+	return cfg.Update
 }
 
 // readVerified reads a device's answer. Once a device is claimed, every

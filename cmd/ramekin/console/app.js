@@ -180,6 +180,9 @@ function card(d) {
       if (failed.length) facts.push(["Firmware that failed", failed.join(", ")]);
     }
   }
+  facts.push(["gokrazy dashboard", d.gokrazy_url
+    ? `${d.gokrazy_url} (${d.gokrazy_login})`
+    : "only on the device itself: it has no gokrazy network password (official firmware works this way)"]);
   facts.push(["Identity", d.verified ? "verified (signed by its claimed key)" : "not claimed"]);
   facts.push(["API", d.url || "—"]);
   facts.push([offline ? "Last answered" : "Polled", offline ? ago(d.seen) : ago(d.polled)]);
@@ -206,11 +209,17 @@ function card(d) {
       el("div", {}, el("h2", { class: "name" }, d.name), el("div", { class: "where" }, st && st.channel ? "channel " + st.channel : "development device")),
       el("div", { class: "head-right" },
         badge(d.health),
-        el("button", {
-          class: "logs-btn", type: "button", "aria-pressed": String(!!showing),
-          "aria-label": `Show ${d.name}'s logs`,
-          onclick: () => (showing ? closeLogs() : openLogs(d.name)),
-        }, "Logs"))),
+        el("div", { class: "card-buttons" }, // Logs, then GK right beside it, even when the header wraps
+          el("button", {
+            class: "logs-btn", type: "button", "aria-pressed": String(!!showing),
+            "aria-label": `Show ${d.name}'s logs`,
+            onclick: () => (showing ? closeLogs() : openLogs(d.name)),
+          }, "Logs"),
+          d.gokrazy_url && /^http:\/\//.test(d.gokrazy_url) && el("a", {
+            class: "button-link", href: d.gokrazy_url, target: "_blank", rel: "noopener noreferrer",
+            title: `gokrazy dashboard: ${d.gokrazy_login}`,
+            "aria-label": `Open ${d.name}'s gokrazy dashboard (new tab)`,
+          }, "GK")))),
     d.detail && el("p", { class: "detail" }, d.detail),
     st ? versions(d, st, offline, busy) : el("p", { class: "nodata" }, "No release information yet."),
     meters,
