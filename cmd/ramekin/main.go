@@ -44,11 +44,13 @@ func init() {
 		{"releases", "", "list published releases and channels", cmdReleases},
 		{"firmware", "init|publish|push", "build the fleet OS image and publish or push it (kernel, gokrazy, ramekind)", cmdFirmware},
 		{"watch", "[--interval D]", "rescan published releases against fresh CVE data and alert", cmdWatch},
+		{"version", "", "show this ramekin's version and whether a newer one is available", cmdVersion},
+		{"update", "[--force]", "install the latest ramekin with go install", cmdUpdate},
 	}
 }
 
 func usage() {
-	fmt.Fprintln(os.Stderr, "usage: ramekin <command> [arguments]\n       ramekin --dashboard [--listen ADDR] [--no-open]\n\ncommands:")
+	fmt.Fprintln(os.Stderr, "usage: ramekin <command> [arguments]\n       ramekin --dashboard [--listen ADDR] [--no-open]\n       ramekin --version\n\ncommands:")
 	for _, c := range commands {
 		fmt.Fprintf(os.Stderr, "  %-9s %-28s %s\n", c.name, c.args, c.summary)
 	}
@@ -65,14 +67,21 @@ func main() {
 	if os.Args[1] == "--dashboard" {
 		commands = append(commands, command{name: "--dashboard", run: cmdDashboard})
 	}
+	if os.Args[1] == "--version" {
+		os.Args[1] = "version"
+	}
 	for _, c := range commands {
 		if c.name == os.Args[1] {
+			notice := startUpdateCheck(ctx, c.name)
 			err := c.run(ctx, os.Args[2:])
 			if errors.Is(err, flag.ErrHelp) {
 				os.Exit(2)
 			}
 			if err != nil {
 				fmt.Fprintf(os.Stderr, "ramekin %s: %v\n", c.name, err)
+			}
+			notice.finish()
+			if err != nil {
 				os.Exit(1)
 			}
 			return
