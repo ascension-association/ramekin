@@ -47,7 +47,8 @@ function el(tag, attrs = {}, ...children) {
     else if (k.startsWith("on")) e.addEventListener(k.slice(2), v);
     else if (v !== undefined && v !== null && v !== false) e.setAttribute(k, v === true ? "" : v);
   }
-  for (const c of children.flat()) {
+  // Flatten fully: callers pass lists of lists, such as Details' [dt, dd] pairs.
+  for (const c of children.flat(Infinity)) {
     if (c === null || c === undefined || c === false) continue;
     e.append(c instanceof Node ? c : document.createTextNode(String(c)));
   }
