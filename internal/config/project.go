@@ -224,7 +224,7 @@ func LoadProject(dir string) (*Project, error) {
 
 // errContainerfile explains the move from Containerfiles to definition files.
 var errContainerfile = errors.New("Containerfile mode was replaced by Apptainer definition files: " +
-	"convert your Containerfile to an Apptainer definition file such as example.def (see \"Converting a Dockerfile or container image\" in the README), " +
+	"convert your Containerfile to an Apptainer definition file such as example.def (see https://github.com/ascension-association/ramekin/wiki/Converting-a-Dockerfile-or-container-image), " +
 	"then set source.mode: def and source.def to its file name, and remove source.containerfile, source.context and source.engine")
 
 func ParseProject(b []byte) (*Project, error) {
@@ -238,7 +238,7 @@ func ParseProject(b []byte) (*Project, error) {
 			}
 		}
 		if strings.Contains(err.Error(), "field store not found") {
-			return nil, errors.New("S3 storage was replaced by GitHub Releases: replace the store: section with releases: {github: owner/repo} (see \"Ship to a fleet of devices\" in the README)")
+			return nil, errors.New("S3 storage was replaced by GitHub Releases: replace the store: section with releases: {github: owner/repo} (see https://github.com/ascension-association/ramekin/wiki/Ship-to-a-fleet-of-devices)")
 		}
 		return nil, err
 	}
