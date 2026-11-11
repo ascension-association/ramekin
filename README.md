@@ -18,11 +18,15 @@ For how Ramekin compares with Mender, balena, RAUC, Talos and similar tools, see
 
 ## Get started
 
-The [Quick start](https://github.com/ascension-association/ramekin/wiki/Quick-start) takes a [NanoPi R76S](https://www.friendlyelec.com/index.php?route=product/product&product_id=303) from out of the box to running your first app in about 10 minutes. You need a Linux computer with [Go](https://go.dev/dl/) and [Apptainer](https://apptainer.org/docs/admin/main/installation.html), then install the CLI:
+The [Quick start](https://github.com/ascension-association/ramekin/wiki/Quick-start) takes a [NanoPi R76S](https://www.friendlyelec.com/index.php?route=product/product&product_id=303) from out of the box to running your first app in about 10 minutes. You need a Linux computer with [Go](https://go.dev/dl/) and [Apptainer](https://apptainer.org/docs/admin/main/installation.html). Install the CLI and the vulnerability scanners, [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), which Ramekin runs on every build:
 
 ```sh
 go install github.com/ascension-association/ramekin/cmd/ramekin@latest
+go install github.com/anchore/syft/cmd/syft@latest
+go install github.com/anchore/grype/cmd/grype@latest
 ```
+
+`ramekin build` and `ramekin push` stop with an error if either scanner is missing. `--no-scan` skips the scan, but don't use it for anything you ship: the scan is what keeps known vulnerabilities off your devices.
 
 ## Fleet dashboard
 
