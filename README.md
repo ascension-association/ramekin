@@ -18,7 +18,7 @@ For how Ramekin compares with Mender, balena, RAUC, Talos and similar tools, see
 
 ## Get started
 
-The [Quick start](https://github.com/ascension-association/ramekin/wiki/Quick-start) takes a [NanoPi R76S](https://www.friendlyelec.com/index.php?route=product/product&product_id=303) from out of the box to running your first app from its eMMC in about 15 minutes. You need a Linux computer with [Go](https://go.dev/dl/) and [Apptainer](https://apptainer.org/docs/admin/main/installation.html#install-from-pre-built-packages). Install the CLI and the vulnerability scanners, [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), which Ramekin runs on every build:
+The [Quick start](https://github.com/ascension-association/ramekin/wiki/Quick-start) takes a [NanoPi R76S](https://www.friendlyelec.com/index.php?route=product/product&product_id=303) from out of the box to running your first app in about 10 minutes. You need a Linux computer with [Go](https://go.dev/dl/) and [Apptainer](https://apptainer.org/docs/admin/main/installation.html#install-from-pre-built-packages). Install the CLI and the vulnerability scanners, [`syft`](https://github.com/anchore/syft) and [`grype`](https://github.com/anchore/grype), which Ramekin runs on every build:
 
 ```sh
 go install github.com/ascension-association/ramekin/cmd/ramekin@latest
