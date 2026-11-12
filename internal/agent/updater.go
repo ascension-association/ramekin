@@ -203,7 +203,9 @@ func receive(r io.Reader, dir string, limit int64) (path, sum string, n int64, e
 type DeviceStatus struct {
 	Device string `json:"device"`
 	// UUID is the device's permanent UUID (identity.DeviceUUID).
-	UUID      string          `json:"uuid,omitempty"`
+	UUID string `json:"uuid,omitempty"`
+	// ShortID is the UUID's short form printed on labels (identity.ShortID).
+	ShortID   string          `json:"short_id,omitempty"`
 	Arch      string          `json:"arch"`
 	Channel   string          `json:"channel"`
 	Current   *Release        `json:"current,omitempty"`

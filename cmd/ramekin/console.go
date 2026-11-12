@@ -53,7 +53,8 @@ type fleetDevice struct {
 	GokrazyNote string `json:"gokrazy_note,omitempty"`
 	// UUID is the device's permanent UUID, as it reports it or as derived
 	// from its hardware ID.
-	UUID string `json:"uuid,omitempty"`
+	UUID    string `json:"uuid,omitempty"`
+	ShortID string `json:"short_id,omitempty"` // printed on its label
 }
 
 type console struct {
@@ -272,10 +273,11 @@ func (c *console) poll(ctx context.Context, name string) {
 	if row.Status != nil && identity.ValidUUID(row.Status.UUID) {
 		row.UUID = row.Status.UUID
 	}
+	row.ShortID = identity.ShortID(row.UUID)
 	c.devices[name] = &row
 }
 
-// label serves a device's sticker: a QR code of its UUID (see `ramekin
+// label serves a device's sticker: a QR code of its short ID (see `ramekin
 // device label`).
 func (c *console) label(w http.ResponseWriter, r *http.Request) {
 	name := r.PathValue("name")
@@ -290,7 +292,7 @@ func (c *console) label(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown device", http.StatusNotFound)
 		return
 	}
-	svg, err := labelSVG(u, name, 30)
+	svg, err := labelSVG(u, 30)
 	if err != nil {
 		http.Error(w, name+" has no UUID yet: its ramekind is older than this dashboard, or it hasn't answered", http.StatusNotFound)
 		return

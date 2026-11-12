@@ -20,6 +20,7 @@ import (
 
 	"github.com/ascension-association/ramekin/internal/agent"
 	"github.com/ascension-association/ramekin/internal/config"
+	"github.com/ascension-association/ramekin/internal/identity"
 	"github.com/ascension-association/ramekin/internal/keys"
 	"github.com/ascension-association/ramekin/internal/sifimg"
 )
@@ -265,12 +266,16 @@ func cmdDevice(ctx context.Context, args []string) error {
 		if err != nil {
 			return err
 		}
-		ents, _ := os.ReadDir(p.Path(filepath.Join(".ramekin", "devices")))
-		for _, e := range ents {
-			name := strings.TrimSuffix(e.Name(), ".json")
+		uuids := map[string]string{}
+		for _, name := range deviceNames(p) {
 			if r, err := resolveDevice(p, name); err == nil {
-				fmt.Printf("%-20s %-36s  %s\n", name, firstNonEmpty(recordUUID(r), "-"), r.URL)
+				u := recordUUID(r)
+				uuids[name] = u
+				fmt.Printf("%-20s %-11s  %-36s  %s\n", name, firstNonEmpty(identity.ShortID(u), "-"), firstNonEmpty(u, "-"), r.URL)
 			}
+		}
+		for id, names := range identity.ShortIDClashes(uuids) {
+			fmt.Fprintf(os.Stderr, "warning: %s share the short ID %s; their labels can't be told apart (their UUIDs differ)\n", strings.Join(names, ", "), id)
 		}
 		return nil
 	}

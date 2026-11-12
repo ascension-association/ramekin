@@ -147,7 +147,7 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.Nonce = r.URL.Query().Get("nonce")
-	s.UUID = a.UUID
+	s.UUID, s.ShortID = a.UUID, identity.ShortID(a.UUID)
 	if a.Gokrazy != nil {
 		s.Features = append(s.Features, FeatureGokrazy)
 	}

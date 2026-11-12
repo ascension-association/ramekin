@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -62,6 +63,66 @@ func (i *Identity) UUID(hardwareID string) (string, error) {
 		return "", fmt.Errorf("saving the device UUID: %w", err)
 	}
 	return s, nil
+}
+
+// crockford is Crockford's base32 alphabet: digits and capitals without
+// I, L, O and U, so it's easy to read back from a label.
+const crockford = "0123456789ABCDEFGHJKMNPQRSTVWXYZ"
+
+// ShortID is a 10-character form of a device UUID for labels, such as
+// Q5RNK-2MXD7: 50 bits of it in Crockford base32. It's short enough to fit
+// the smallest QR code (alphanumeric mode) and to print legibly on a small
+// sticker. It is "" if u isn't a valid UUID.
+//
+// The bits come from bytes 0-5 and the top of byte 7, skipping the version
+// in byte 6, so they're all hash output (UUIDv5) or random (UUIDv4). With 50
+// bits, two devices of a 50,000-device fleet share one with a probability
+// of about 1 in 2 million; ShortIDClashes finds them.
+func ShortID(u string) string {
+	if !ValidUUID(u) {
+		return ""
+	}
+	b, _ := hex.DecodeString(strings.ReplaceAll(u, "-", ""))
+	var n uint64
+	for _, x := range b[:6] {
+		n = n<<8 | uint64(x)
+	}
+	n = n<<2 | uint64(b[7]>>6)
+	var s [10]byte
+	for i := 9; i >= 0; i-- {
+		s[i] = crockford[n&31]
+		n >>= 5
+	}
+	return string(s[:5]) + "-" + string(s[5:])
+}
+
+// ShortIDClashes groups names (to UUIDs) whose UUIDs differ but share a
+// short ID. It returns each clashing short ID with its names, sorted.
+func ShortIDClashes(uuids map[string]string) map[string][]string {
+	byID := map[string]map[string]string{} // short ID -> name -> UUID
+	for name, u := range uuids {
+		if id := ShortID(u); id != "" {
+			if byID[id] == nil {
+				byID[id] = map[string]string{}
+			}
+			byID[id][name] = u
+		}
+	}
+	out := map[string][]string{}
+	for id, names := range byID {
+		distinct := map[string]bool{}
+		for _, u := range names {
+			distinct[u] = true
+		}
+		if len(distinct) < 2 {
+			continue // the same device under two names isn't a clash
+		}
+		for name := range names {
+			out[id] = append(out[id], name)
+		}
+		sort.Strings(out[id])
+	}
+	return out
 }
 
 func formatUUID(u [16]byte) string {

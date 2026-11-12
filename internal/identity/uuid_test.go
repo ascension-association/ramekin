@@ -3,6 +3,7 @@ package identity
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -51,5 +52,42 @@ func TestValidUUID(t *testing.T) {
 		if ValidUUID(s) != want {
 			t.Errorf("ValidUUID(%q) = %v", s, !want)
 		}
+	}
+}
+
+func TestShortID(t *testing.T) {
+	// Reference value computed separately in Python.
+	if got, want := ShortID("b8eafc38-a150-5c76-a06e-93a1fe3cccde"), "Q3NFR-E51A1"; got != want {
+		t.Fatalf("ShortID = %s, want %s", got, want)
+	}
+	if ShortID("not a uuid") != "" {
+		t.Fatal("short ID for something that isn't a UUID")
+	}
+	seen := map[string]bool{}
+	for i := 0; i < 2000; i++ {
+		id := ShortID(DeviceUUID("dt:" + string(rune('a'+i%26)) + string(rune('0'+i))))
+		if len(id) != 11 || id[5] != '-' || strings.Trim(id[:5]+id[6:], crockford) != "" {
+			t.Fatalf("malformed short ID %q", id)
+		}
+		if seen[id] {
+			t.Fatalf("short ID %s repeated", id)
+		}
+		seen[id] = true
+	}
+}
+
+func TestShortIDClashes(t *testing.T) {
+	a := "b8eafc38-a150-5c76-a06e-93a1fe3cccde"
+	// Same first 50 bits (bytes 0-5, top of byte 7), different elsewhere.
+	b := "b8eafc38-a150-4c76-b06e-93a1fe3c0000"
+	if ShortID(a) != ShortID(b) {
+		t.Fatalf("test UUIDs should share a short ID: %s %s", ShortID(a), ShortID(b))
+	}
+	got := ShortIDClashes(map[string]string{"pi-1": a, "pi-2": b, "other": "0f1e2d3c-4b5a-4968-8776-655443322110", "pi-1-old": a})
+	if len(got) != 1 || strings.Join(got[ShortID(a)], ",") != "pi-1,pi-1-old,pi-2" {
+		t.Fatalf("clashes: %v", got)
+	}
+	if got := ShortIDClashes(map[string]string{"pi": a, "pi-again": a}); len(got) != 0 {
+		t.Fatalf("one device under two names reported as a clash: %v", got)
 	}
 }

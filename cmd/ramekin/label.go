@@ -4,13 +4,13 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"html"
 	"os"
 	"strings"
 	"time"
 
 	"rsc.io/qr"
 
+	"github.com/ascension-association/ramekin/internal/config"
 	"github.com/ascension-association/ramekin/internal/identity"
 )
 
@@ -40,8 +40,8 @@ func deviceUUID(ctx context.Context, d *deviceRecord) (string, error) {
 	return st.UUID, d.save()
 }
 
-// deviceLabel writes a sticker for a device: a QR code of its permanent
-// UUID, with the UUID and the device's name printed under it.
+// deviceLabel writes a sticker for a device: a QR code of its short ID (see
+// identity.ShortID), with the short ID printed under it.
 func deviceLabel(ctx context.Context, args []string) error {
 	fl := flags("device label")
 	out := fl.String("o", "", "output file (default <device>-label.svg)")
@@ -68,17 +68,18 @@ func deviceLabel(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	svg, err := labelSVG(u, pos[0], *size)
+	svg, err := labelSVG(u, *size)
 	if err != nil {
 		return err
 	}
+	warnShortIDClash(p, pos[0], u)
 	if *out == "" {
 		*out = pos[0] + "-label.svg"
 	}
 	if err := os.WriteFile(*out, []byte(svg), 0o644); err != nil {
 		return err
 	}
-	fmt.Printf("%s  %s\nwrote %s\n", pos[0], u, *out)
+	fmt.Printf("%s  %s  (UUID %s)\nwrote %s\n", pos[0], identity.ShortID(u), u, *out)
 	return nil
 }
 
@@ -109,39 +110,48 @@ func qrSVG(text string, quiet int) (path string, side int, err error) {
 	return b.String(), c.Size + 2*quiet, nil
 }
 
-// labelSVG lays out a sticker widthMM wide: the QR code, then the device
-// name and its UUID on two lines.
-func labelSVG(u, name string, widthMM float64) (string, error) {
-	if !identity.ValidUUID(u) {
+// labelSVG lays out a sticker widthMM wide for the device with UUID u: a
+// QR code of its short ID, with the short ID in large type under it. The
+// short ID fits the smallest QR code, so its modules are as big as they can
+// be on a small sticker. The device's name isn't on it: names can change,
+// and the short ID identifies the device.
+func labelSVG(u string, widthMM float64) (string, error) {
+	id := identity.ShortID(u)
+	if id == "" {
 		return "", fmt.Errorf("%q isn't a UUID", u)
 	}
-	path, side, err := qrSVG(u, 4)
+	path, side, err := qrSVG(id, 4)
 	if err != nil {
 		return "", err
 	}
-	// Text below the code and its quiet zone (scanners need that margin
-	// clear), in module units: the name, then the UUID on two lines, split
-	// after its third group, keeping the hyphen so it reads back exactly.
+	// The ID goes below the code and its quiet zone (scanners need that
+	// margin clear), in module units, as large as fits the width: monospace
+	// glyphs are about 0.6em wide.
 	w := float64(side)
-	nameSize, idSize := w/11, w/15
-	nameY := w + nameSize*0.75
-	id1Y := nameY + idSize*1.3
-	id2Y := id1Y + idSize*1.15
-	h := id2Y + idSize*0.7
+	idSize := w * 0.92 / (0.6 * float64(len(id)))
+	idY := w + idSize*0.7
+	h := idY + idSize*0.45
 	heightMM := widthMM * h / w
-	first, rest := u[:19], u[19:]
 	var b strings.Builder
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%.2fmm" height="%.2fmm" viewBox="0 0 %d %.2f">`+"\n", widthMM, heightMM, side, h)
-	fmt.Fprintf(&b, "<title>%s %s</title>\n", html.EscapeString(name), u)
+	fmt.Fprintf(&b, "<title>%s (UUID %s)</title>\n", id, u)
 	fmt.Fprintf(&b, `<rect width="100%%" height="100%%" fill="#fff"/>`+"\n")
 	fmt.Fprintf(&b, `<path fill="#000" shape-rendering="crispEdges" d="%s"/>`+"\n", path)
-	text := func(y, size float64, weight, family, s string) {
-		fmt.Fprintf(&b, `<text x="%.2f" y="%.2f" font-size="%.2f" font-weight="%s" font-family="%s" text-anchor="middle" fill="#000">%s</text>`+"\n",
-			w/2, y, size, weight, family, html.EscapeString(s))
-	}
-	text(nameY, nameSize, "bold", "sans-serif", name)
-	text(id1Y, idSize, "normal", "monospace", first)
-	text(id2Y, idSize, "normal", "monospace", rest)
+	fmt.Fprintf(&b, `<text x="%.2f" y="%.2f" font-size="%.2f" font-weight="bold" font-family="monospace" text-anchor="middle" fill="#000">%s</text>`+"\n", w/2, idY, idSize, id)
 	b.WriteString("</svg>\n")
 	return b.String(), nil
+}
+
+// warnShortIDClash warns if another device in the project has the same
+// short ID as this one (and a different UUID): labels couldn't tell them apart.
+func warnShortIDClash(p *config.Project, name, u string) {
+	uuids := map[string]string{name: u}
+	for _, n := range deviceNames(p) {
+		if d, err := resolveDevice(p, n); err == nil && n != name {
+			uuids[n] = recordUUID(d)
+		}
+	}
+	if names := identity.ShortIDClashes(uuids)[identity.ShortID(u)]; len(names) > 0 {
+		fmt.Fprintf(os.Stderr, "warning: %s share the short ID %s; their labels can't be told apart (their UUIDs differ)\n", strings.Join(names, ", "), identity.ShortID(u))
+	}
 }

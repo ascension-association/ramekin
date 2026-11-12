@@ -14,21 +14,22 @@ import (
 )
 
 func TestLabelSVG(t *testing.T) {
-	const u = "b8eafc38-a150-5c76-a06e-93a1fe3cccde"
-	svg, err := labelSVG(u, `pi<&>"1`, 30)
+	const u, id = "b8eafc38-a150-5c76-a06e-93a1fe3cccde", "Q3NFR-E51A1"
+	svg, err := labelSVG(u, 30)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`width="30.00mm"`, "pi&lt;&amp;&gt;&#34;1", "b8eafc38-a150-5c76-", ">a06e-93a1fe3cccde<"} {
+	for _, want := range []string{`width="30.00mm"`, ">" + id + "<"} {
 		if !strings.Contains(svg, want) {
 			t.Errorf("label missing %q:\n%s", want, svg)
 		}
 	}
-	if strings.Contains(svg, "pi<&") {
-		t.Error("device name not escaped")
-	}
-	if _, err := labelSVG("not-a-uuid", "pi", 30); err == nil {
+	if _, err := labelSVG("not-a-uuid", 30); err == nil {
 		t.Error("made a label for something that isn't a UUID")
+	}
+	// The short ID fits the smallest QR code: 21 modules, plus the quiet zone.
+	if _, side, err := qrSVG(id, 4); err != nil || side != 21+8 {
+		t.Errorf("QR code is %d modules with its quiet zone, want 29 (%v)", side, err)
 	}
 
 	// Decode the QR code for real when the tools are installed.
@@ -40,12 +41,12 @@ func TestLabelSVG(t *testing.T) {
 	dir := t.TempDir()
 	in, png := filepath.Join(dir, "l.svg"), filepath.Join(dir, "l.png")
 	os.WriteFile(in, []byte(svg), 0o644)
-	if out, err := exec.Command(render, "-w", "200", in, "-o", png).CombinedOutput(); err != nil {
+	if out, err := exec.Command(render, "-w", "120", in, "-o", png).CombinedOutput(); err != nil {
 		t.Fatalf("rendering: %v\n%s", err, out)
 	}
 	out, err := exec.Command(decode, "-q", "--raw", png).Output()
-	if err != nil || strings.TrimSpace(string(out)) != u {
-		t.Fatalf("scanning the label gave %q, %v; want %s", out, err, u)
+	if err != nil || strings.TrimSpace(string(out)) != id {
+		t.Fatalf("scanning the label gave %q, %v; want %s", out, err, id)
 	}
 }
 
@@ -93,7 +94,7 @@ func TestConsoleLabel(t *testing.T) {
 		t.Fatalf("device without UUID: %d %q", w.Code, w.Body.String())
 	}
 	w := get("/api/devices/pi/label.svg", "k")
-	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(w.Body.String(), "a06e-93a1fe3cccde") {
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(w.Body.String(), ">Q3NFR-E51A1<") {
 		t.Fatalf("label: %d %s\n%s", w.Code, w.Header().Get("Content-Type"), w.Body.String())
 	}
 }

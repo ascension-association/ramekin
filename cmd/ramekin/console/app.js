@@ -183,6 +183,7 @@ function card(d) {
     }
   }
   if (d.gokrazy_note) facts.push(["gokrazy dashboard", d.gokrazy_note]);
+  if (d.short_id) facts.push(["ID (on its label)", d.short_id]);
   if (d.uuid) facts.push(["UUID", d.uuid]);
   facts.push(["Identity", d.verified ? "verified (signed by its claimed key)" : "not claimed"]);
   facts.push(["API", d.url || "—"]);
@@ -206,7 +207,7 @@ function card(d) {
   const qr = labels.get(d.name);
   if (qr) {
     actions.append(el("figure", { class: "label" },
-      el("img", { src: qr, alt: `QR code of ${d.name}'s UUID, ${d.uuid}`, width: "180" }),
+      el("img", { src: qr, alt: `QR code of ${d.name}'s ID, ${d.short_id}`, width: "180" }),
       el("figcaption", {},
         el("a", { href: qr, download: `${d.name}-label.svg` }, "Download SVG"),
         el("button", { type: "button", onclick: () => { labels.delete(d.name); render(); } }, "Hide"))));
