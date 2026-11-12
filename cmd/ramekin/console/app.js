@@ -207,7 +207,7 @@ function card(d) {
   const qr = labels.get(d.name);
   if (qr) {
     actions.append(el("figure", { class: "label" },
-      el("img", { src: qr, alt: `QR code of ${d.name}'s ID, ${d.short_id}`, width: "180" }),
+      el("img", { src: qr, alt: `QR code of ${d.name}'s ID, ${d.short_id}`, width: "270" }),
       el("figcaption", {},
         el("a", { href: qr, download: `${d.name}-label.svg` }, "Download SVG"),
         el("button", { type: "button", onclick: () => { labels.delete(d.name); render(); } }, "Hide"))));

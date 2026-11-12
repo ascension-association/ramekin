@@ -292,7 +292,7 @@ func (c *console) label(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown device", http.StatusNotFound)
 		return
 	}
-	svg, err := labelSVG(u, 30)
+	svg, err := labelSVG(u, mustLabelSize(defaultLabelSize, 300))
 	if err != nil {
 		http.Error(w, name+" has no UUID yet: its ramekind is older than this dashboard, or it hasn't answered", http.StatusNotFound)
 		return
