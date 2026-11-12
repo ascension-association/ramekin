@@ -213,7 +213,7 @@ func overlayDef(base, tmp, runscript string) string {
 	sb.WriteString(`
 %post
     while IFS= read -r p; do [ -n "$p" ] && rm -rf "/$p"; done < /.ramekin-whiteouts.txt
-    while IFS= read -r p; do [ -n "$p" ] && find "/$p" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; done < /.ramekin-opaque.txt
+    while IFS= read -r p; do if [ -n "$p" ] && [ -d "/$p" ]; then find "/$p" -mindepth 1 -maxdepth 1 -exec rm -rf {} +; fi; done < /.ramekin-opaque.txt
     tar -C / -xpf /.ramekin-upper.tar
     rm -f /.ramekin-upper.tar /.ramekin-whiteouts.txt /.ramekin-opaque.txt
 `)
