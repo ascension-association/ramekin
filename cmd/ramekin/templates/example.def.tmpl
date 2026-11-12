@@ -8,6 +8,11 @@ From: cgr.dev/chainguard/wolfi-base:latest
     app.sh /usr/local/bin/app
 
 %post
+    # Chainguard's base image pins its packages, so unpin them and upgrade:
+    # this installs Wolfi's latest security fixes even before the base image
+    # is rebuilt with them.
+    sed -i 's/[=<>~].*//' /etc/apk/world
+    apk upgrade --no-cache
     # Packages come from the Wolfi repository, e.g. python-3.12 or nodejs.
     # On a workstation of another architecture, this runs under qemu binfmt.
     apk add --no-cache figlet
