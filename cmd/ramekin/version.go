@@ -175,10 +175,13 @@ func binaryVersion(path string) string {
 	return info.Main.Version
 }
 
-// latestVersion asks the Go module proxy (GOPROXY's first entry, if it's a
-// URL) for the newest release. It reads both the version list and @latest
-// and takes the higher: after a release, the proxy's @latest can lag for
-// half an hour while the list already has the new version.
+// latestVersion finds the newest release: the highest of GitHub's latest
+// release and the Go module proxy's version list and @latest (GOPROXY's
+// first entry, if it's a URL). GitHub knows about a release the moment it's
+// published; the proxy only learns of a version once someone fetches it by
+// name, and caches its list and @latest on top of that, so on its own it
+// can miss a release for a while. `go install` still fetches through the
+// proxy, which serves any version asked for by name straight away.
 func latestVersion(ctx context.Context) (string, error) {
 	proxy := moduleProxy
 	if first, _, _ := strings.Cut(env("GOPROXY"), ","); strings.HasPrefix(first, "https://") || strings.HasPrefix(first, "http://") {
@@ -204,10 +207,39 @@ func latestVersion(ctx context.Context) (string, error) {
 		}
 		consider(v.Version)
 	}
+	gh, errGitHub := githubLatestRelease(ctx)
+	consider(gh)
 	if best == "" {
-		return "", fmt.Errorf("no release version from %s: %v", proxy, errors.Join(errList, errLatest))
+		return "", fmt.Errorf("no release version from GitHub or %s: %v", proxy, errors.Join(errGitHub, errList, errLatest))
 	}
 	return best, nil
+}
+
+// githubReleasesLatest is GitHub's API for ramekin's latest release (not a
+// draft or pre-release); tests replace it.
+var githubReleasesLatest = "https://api.github.com/repos/ascension-association/ramekin/releases/latest"
+
+func githubLatestRelease(ctx context.Context) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, githubReleasesLatest, nil)
+	if err != nil {
+		return "", err
+	}
+	req.Header.Set("Accept", "application/vnd.github+json")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("GitHub answered %s", resp.Status) // e.g. its hourly limit of 60 unauthenticated requests
+	}
+	var r struct {
+		TagName string `json:"tag_name"`
+	}
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&r); err != nil {
+		return "", fmt.Errorf("GitHub: %w", err)
+	}
+	return r.TagName, nil
 }
 
 func proxyGet(ctx context.Context, proxy, path string) ([]byte, error) {

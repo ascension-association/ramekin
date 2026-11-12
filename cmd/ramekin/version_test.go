@@ -83,6 +83,9 @@ func fakeProxy(t *testing.T, version string, status int) *httptest.Server {
 }
 
 func TestLatestVersion(t *testing.T) {
+	oldGH := githubReleasesLatest
+	t.Cleanup(func() { githubReleasesLatest = oldGH })
+	githubReleasesLatest = fakeGitHub(t, "", http.StatusNotFound) // proxy only
 	t.Setenv("GOPROXY", "")
 	old := moduleProxy
 	t.Cleanup(func() { moduleProxy = old })
@@ -213,6 +216,9 @@ func fakeProxyList(t *testing.T, list, latest string) string {
 // TestLatestVersionLaggingProxy: right after a release, the proxy's version
 // list has it but @latest still names the previous one.
 func TestLatestVersionLaggingProxy(t *testing.T) {
+	oldGH := githubReleasesLatest
+	t.Cleanup(func() { githubReleasesLatest = oldGH })
+	githubReleasesLatest = fakeGitHub(t, "", http.StatusNotFound) // proxy only
 	t.Setenv("GOPROXY", "")
 	old := moduleProxy
 	t.Cleanup(func() { moduleProxy = old })
@@ -241,5 +247,47 @@ func TestUpdateArgs(t *testing.T) {
 	}
 	if err := cmdUpdate(context.Background(), []string{"v0.3.7", "v0.3.8"}); err == nil || !strings.Contains(err.Error(), "usage") {
 		t.Errorf("two versions: %v", err)
+	}
+}
+
+// fakeGitHub answers GitHub's latest-release API with tag, or with status
+// when it isn't 200.
+func fakeGitHub(t *testing.T, tag string, status int) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if status != http.StatusOK {
+			http.Error(w, "rate limited", status)
+			return
+		}
+		io.WriteString(w, `{"tag_name":"`+tag+`","draft":false,"prerelease":false}`)
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestLatestVersionGitHub: the proxy only learns of a release once someone
+// fetches it, so right after a release it can name the previous one in both
+// its list and @latest, while GitHub already has it.
+func TestLatestVersionGitHub(t *testing.T) {
+	t.Setenv("GOPROXY", "")
+	oldProxy, oldGH := moduleProxy, githubReleasesLatest
+	t.Cleanup(func() { moduleProxy, githubReleasesLatest = oldProxy, oldGH })
+	for _, c := range []struct {
+		name, list, latest, gh string
+		ghStatus               int
+		want                   string
+	}{
+		{"GitHub ahead of the proxy", "v0.3.7\nv0.3.8\n", "v0.3.7", "v0.3.9", 200, "v0.3.9"},
+		{"GitHub rate limited", "v0.3.7\nv0.3.8\n", "v0.3.7", "", 403, "v0.3.8"},
+		{"GitHub behind a newer proxy", "v0.3.10\n", "v0.3.10", "v0.3.9", 200, "v0.3.10"},
+		{"only GitHub", "", "", "v0.3.9", 200, "v0.3.9"},
+		{"GitHub tag isn't a release", "v0.3.8\n", "", "nightly", 200, "v0.3.8"},
+	} {
+		moduleProxy = fakeProxyList(t, c.list, c.latest)
+		githubReleasesLatest = fakeGitHub(t, c.gh, c.ghStatus)
+		got, err := latestVersion(context.Background())
+		if got != c.want || err != nil {
+			t.Errorf("%s: got %q, %v; want %q", c.name, got, err, c.want)
+		}
 	}
 }
