@@ -210,9 +210,11 @@ func labelSVG(u string, l labelSize) (string, error) {
 	block := fontSize * 1.15 * float64(len(lines))
 	baseline := textY + (textH-block)/2 + fontSize*0.9
 	var b strings.Builder
-	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %d %d">`+"\n", l.svgLength(l.W), l.svgLength(l.H), l.W, l.H)
+	// White behind everything, in two ways: some viewers ignore one or the
+	// other (a percentage-sized rect came out a fraction of the label).
+	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %d %d" style="background-color:#fff">`+"\n", l.svgLength(l.W), l.svgLength(l.H), l.W, l.H)
 	fmt.Fprintf(&b, "<title>%s (UUID %s)</title>\n", id, u)
-	fmt.Fprintf(&b, `<rect width="100%%" height="100%%" fill="#fff"/>`+"\n")
+	fmt.Fprintf(&b, `<rect x="0" y="0" width="%d" height="%d" fill="#fff"/>`+"\n", l.W, l.H)
 	fmt.Fprintf(&b, `<path fill="#000" shape-rendering="crispEdges" d="%s"/>`+"\n", qrPath(c, m, qx+qrQuiet*m, qy+qrQuiet*m))
 	for i, s := range lines {
 		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" font-size="%.1f" font-weight="bold" font-family="monospace" text-anchor="middle" fill="#000">%s</text>`+"\n",

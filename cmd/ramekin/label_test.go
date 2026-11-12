@@ -49,12 +49,17 @@ func TestLabelSVG(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, want := range []string{`width="1.5in" height="0.75in" viewBox="0 0 450 225"`, ">Q3NFR-<", ">E51A1<", "(UUID " + u + ")"} {
+	// The white background covers the whole label in explicit units: some
+	// viewers sized a width="100%" rect to a fraction of it.
+	for _, want := range []string{`width="1.5in" height="0.75in" viewBox="0 0 450 225"`, `<rect x="0" y="0" width="450" height="225" fill="#fff"/>`, ">Q3NFR-<", ">E51A1<", "(UUID " + u + ")"} {
 		if !strings.Contains(svg, want) {
 			t.Errorf("label missing %q:\n%s", want, svg)
 		}
 	}
 	// Modules are whole dots: 225 dots / 29 modules (code and quiet zone) = 7.
+	if strings.Contains(svg, "%") {
+		t.Errorf("label uses percentages:\n%s", svg)
+	}
 	if !strings.Contains(svg, "v7h-") {
 		t.Errorf("QR modules aren't 7 dots high:\n%s", svg)
 	}
