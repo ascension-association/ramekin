@@ -67,24 +67,41 @@ func cmdVersion(ctx context.Context, args []string) error {
 func cmdUpdate(ctx context.Context, args []string) error {
 	fl := flags("update")
 	force := fl.Bool("force", false, "reinstall even if this is already the latest version")
-	if _, err := parse(fl, args); err != nil {
+	pos, err := parse(fl, args)
+	if err != nil {
 		return err
 	}
-	cur := currentVersion()
-	latest, err := latestVersion(ctx)
-	if err != nil {
-		return fmt.Errorf("finding the latest version: %w", err)
+	if len(pos) > 1 {
+		return errors.New("usage: ramekin update [version] [--force]")
 	}
-	saveUpdateCheck(latest)
-	if !*force && isRelease(cur) && !newer(latest, cur) {
-		fmt.Printf("ramekin %s is the latest version.\n", cur)
-		return nil
+	cur := currentVersion()
+	var latest string
+	if len(pos) == 1 {
+		// A version named on the command line, e.g. one the proxy doesn't
+		// list as latest yet, or an earlier one to go back to.
+		latest = "v" + strings.TrimPrefix(pos[0], "v")
+		if !isRelease(latest) {
+			return fmt.Errorf("%q isn't a release version like v0.3.7", pos[0])
+		}
+		if !*force && latest == cur {
+			fmt.Printf("ramekin %s is already installed.\n", cur)
+			return nil
+		}
+	} else {
+		if latest, err = latestVersion(ctx); err != nil {
+			return fmt.Errorf("finding the latest version: %w", err)
+		}
+		saveUpdateCheck(latest)
+		if !*force && isRelease(cur) && !newer(latest, cur) {
+			fmt.Printf("ramekin %s is the latest version.\n", cur)
+			return nil
+		}
 	}
 	goBin, err := exec.LookPath("go")
 	if err != nil {
 		return fmt.Errorf("updating needs Go (https://go.dev/dl/), which `go install` uses to build ramekin: %w", err)
 	}
-	fmt.Printf("updating ramekin %s to %s...\n", cur, latest)
+	fmt.Printf("installing ramekin %s (you have %s)...\n", latest, cur)
 	cmd := exec.CommandContext(ctx, goBin, "install", installPath+"@"+latest)
 	cmd.Stdout, cmd.Stderr = os.Stdout, os.Stderr
 	if err := cmd.Run(); err != nil {
@@ -159,7 +176,9 @@ func binaryVersion(path string) string {
 }
 
 // latestVersion asks the Go module proxy (GOPROXY's first entry, if it's a
-// URL) for the newest release, the one `go install ...@latest` would fetch.
+// URL) for the newest release. It reads both the version list and @latest
+// and takes the higher: after a release, the proxy's @latest can lag for
+// half an hour while the list already has the new version.
 func latestVersion(ctx context.Context) (string, error) {
 	proxy := moduleProxy
 	if first, _, _ := strings.Cut(env("GOPROXY"), ","); strings.HasPrefix(first, "https://") || strings.HasPrefix(first, "http://") {
@@ -167,26 +186,44 @@ func latestVersion(ctx context.Context) (string, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(proxy, "/")+"/"+modulePath+"/@latest", nil)
+	best := ""
+	consider := func(v string) {
+		if isRelease(v) && (best == "" || newer(v, best)) {
+			best = v
+		}
+	}
+	list, errList := proxyGet(ctx, proxy, "/@v/list")
+	for _, v := range strings.Fields(string(list)) {
+		consider(v)
+	}
+	latest, errLatest := proxyGet(ctx, proxy, "/@latest")
+	if errLatest == nil {
+		var v struct{ Version string }
+		if err := json.Unmarshal(latest, &v); err != nil {
+			errLatest = fmt.Errorf("%s: %w", proxy, err)
+		}
+		consider(v.Version)
+	}
+	if best == "" {
+		return "", fmt.Errorf("no release version from %s: %v", proxy, errors.Join(errList, errLatest))
+	}
+	return best, nil
+}
+
+func proxyGet(ctx context.Context, proxy, path string) ([]byte, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, strings.TrimSuffix(proxy, "/")+"/"+modulePath+path, nil)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%s answered %s", proxy, resp.Status)
+		return nil, fmt.Errorf("%s%s answered %s", proxy, path, resp.Status)
 	}
-	var v struct{ Version string }
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(&v); err != nil {
-		return "", fmt.Errorf("%s: %w", proxy, err)
-	}
-	if !isRelease(v.Version) {
-		return "", fmt.Errorf("%s reported %q, not a release version", proxy, v.Version)
-	}
-	return v.Version, nil
+	return io.ReadAll(io.LimitReader(resp.Body, 1<<20))
 }
 
 // parseRelease splits a release version such as v1.2.3 into numbers. Pre-

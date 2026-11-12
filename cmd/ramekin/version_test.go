@@ -192,3 +192,54 @@ func TestUpdateCheckCache(t *testing.T) {
 		t.Fatalf("saved cache: %+v", c)
 	}
 }
+
+// fakeProxyList serves a version list and @latest; an empty value is a 404.
+func fakeProxyList(t *testing.T, list, latest string) string {
+	t.Helper()
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/"+modulePath+"/@v/list" && list != "":
+			io.WriteString(w, list)
+		case r.URL.Path == "/"+modulePath+"/@latest" && latest != "":
+			io.WriteString(w, `{"Version":"`+latest+`"}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	return srv.URL
+}
+
+// TestLatestVersionLaggingProxy: right after a release, the proxy's version
+// list has it but @latest still names the previous one.
+func TestLatestVersionLaggingProxy(t *testing.T) {
+	t.Setenv("GOPROXY", "")
+	old := moduleProxy
+	t.Cleanup(func() { moduleProxy = old })
+	for _, c := range []struct {
+		name, list, latest, want string
+	}{
+		{"@latest lags", "v0.3.5\nv0.3.6\nv0.3.7\n", "v0.3.6", "v0.3.7"},
+		{"list order and junk", "v0.3.10\nv0.4.0-rc.1\nv0.3.9\nv0.3.11-0.20261112-abcdef\n", "v0.3.9", "v0.3.10"},
+		{"no list", "", "v0.3.7", "v0.3.7"},
+		{"no @latest", "v0.3.7\n", "", "v0.3.7"},
+		{"neither", "", "", ""},
+	} {
+		moduleProxy = fakeProxyList(t, c.list, c.latest)
+		got, err := latestVersion(context.Background())
+		if got != c.want || (c.want == "") != (err != nil) {
+			t.Errorf("%s: got %q, %v; want %q", c.name, got, err, c.want)
+		}
+	}
+}
+
+func TestUpdateArgs(t *testing.T) {
+	for _, args := range [][]string{{"banana"}, {"v0.3"}, {"v0.4.0-rc.1"}} {
+		if err := cmdUpdate(context.Background(), args); err == nil || !strings.Contains(err.Error(), "isn't a release version") {
+			t.Errorf("update %v: %v", args, err)
+		}
+	}
+	if err := cmdUpdate(context.Background(), []string{"v0.3.7", "v0.3.8"}); err == nil || !strings.Contains(err.Error(), "usage") {
+		t.Errorf("two versions: %v", err)
+	}
+}

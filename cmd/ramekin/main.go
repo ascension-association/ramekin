@@ -45,7 +45,7 @@ func init() {
 		{"firmware", "init|publish|push", "build the fleet OS image and publish or push it (kernel, gokrazy, ramekind)", cmdFirmware},
 		{"watch", "[--interval D]", "rescan published releases against fresh CVE data and alert", cmdWatch},
 		{"version", "", "show this ramekin's version and whether a newer one is available", cmdVersion},
-		{"update", "[--force]", "install the latest ramekin with go install", cmdUpdate},
+		{"update", "[version] [--force]", "install the latest ramekin (or the version given) with go install", cmdUpdate},
 	}
 }
 
