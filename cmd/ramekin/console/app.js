@@ -19,6 +19,7 @@ const ORDER = ["unhealthy", "offline", "warning", "updating", "idle", "healthy"]
 const confirming = new Map(); // name -> sha of the release to switch to
 const pending = new Map(); // name -> version being switched to
 const messages = new Map(); // name -> {ok, text}
+const labels = new Map(); // name -> data: URL of the device's label SVG, while shown
 
 let pollMs = 5000;
 
@@ -182,6 +183,7 @@ function card(d) {
     }
   }
   if (d.gokrazy_note) facts.push(["gokrazy dashboard", d.gokrazy_note]);
+  if (d.uuid) facts.push(["UUID", d.uuid]);
   facts.push(["Identity", d.verified ? "verified (signed by its claimed key)" : "not claimed"]);
   facts.push(["API", d.url || "—"]);
   facts.push([offline ? "Last answered" : "Polled", offline ? ago(d.seen) : ago(d.polled)]);
@@ -201,6 +203,14 @@ function card(d) {
   }
   const msg = messages.get(d.name);
   if (msg && !busy) actions.append(el("p", { class: "msg " + (msg.ok ? "ok" : "err"), role: "status" }, msg.text));
+  const qr = labels.get(d.name);
+  if (qr) {
+    actions.append(el("figure", { class: "label" },
+      el("img", { src: qr, alt: `QR code of ${d.name}'s UUID, ${d.uuid}`, width: "180" }),
+      el("figcaption", {},
+        el("a", { href: qr, download: `${d.name}-label.svg` }, "Download SVG"),
+        el("button", { type: "button", onclick: () => { labels.delete(d.name); render(); } }, "Hide"))));
+  }
 
   const showing = logs && logs.name === d.name;
   return el("article", { class: "card h-" + d.health + (offline ? " offline" : ""), "aria-label": d.name },
@@ -224,7 +234,8 @@ function card(d) {
     st ? versions(d, st, offline, busy) : el("p", { class: "nodata" }, "No release information yet."),
     meters,
     el("details", {}, el("summary", {}, "Details"),
-      el("dl", {}, facts.map(([k, v]) => [el("dt", {}, k), el("dd", {}, v)]))),
+      el("dl", {}, facts.map(([k, v]) => [el("dt", {}, k), el("dd", {}, v)])),
+      d.uuid && !qr && el("button", { type: "button", class: "qr-btn", onclick: () => showLabel(d.name) }, "Show QR code")),
     actions.childElementCount ? actions : null);
 }
 
@@ -381,6 +392,21 @@ async function openGokrazy(name) {
     messages.set(name, { ok: false, text: `Couldn't open ${name}'s gokrazy dashboard: ${e.message}` });
     render();
   }
+}
+
+// The device's sticker, as made by `ramekin device label`. It's shown as an
+// image (scripts in an SVG image never run) from a data: URL, which the
+// console's CSP allows for images.
+async function showLabel(name) {
+  try {
+    const r = await fetch(`/api/devices/${encodeURIComponent(name)}/label.svg`, { headers: { "X-Ramekin-Console": key } });
+    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+    const svg = await r.text();
+    labels.set(name, "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg))));
+  } catch (e) {
+    messages.set(name, { ok: false, text: `Couldn't show ${name}'s QR code: ${e.message}` });
+  }
+  render();
 }
 
 async function loop() {

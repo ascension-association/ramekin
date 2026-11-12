@@ -186,6 +186,9 @@ func deviceClaim(ctx context.Context, args []string) error {
 	}
 
 	rec.Token, rec.PublicKey, rec.HardwareID, rec.AgeRecipient = req.Token, info.PublicKey, info.HardwareID, info.AgeRecipient
+	if identity.ValidUUID(info.UUID) {
+		rec.UUID = info.UUID // older ramekind sends none: recordUUID derives it from the hardware ID
+	}
 	if req.GokrazyPassword != "" {
 		rec.GokrazyPassword = req.GokrazyPassword
 	}
@@ -203,7 +206,7 @@ func deviceClaim(ctx context.Context, args []string) error {
 	if err := keys.AppendRecipient(p.Path(p.Encrypt.RecipientsFile), info.AgeRecipient, "device "+name+" (claimed)"); err != nil {
 		return err
 	}
-	fmt.Printf("claimed %s (hardware %s); it restarts to use its identity\n", name, info.HardwareID)
+	fmt.Printf("claimed %s (hardware %s, UUID %s); it restarts to use its identity\n", name, info.HardwareID, firstNonEmpty(recordUUID(rec), "unknown"))
 	fmt.Printf("its key was added to %s: releases published from now on are encrypted to it\n", p.Encrypt.RecipientsFile)
 	return nil
 }

@@ -34,8 +34,10 @@ type Claimer struct {
 	// Verifier checks the identity record: the project key the device's
 	// image was built with. On official firmware it is nil until claimed,
 	// and the claim brings the project's settings, key included.
-	Verifier    signature.Verifier
-	HardwareID  string
+	Verifier   signature.Verifier
+	HardwareID string
+	// UUID is the device's permanent UUID (identity.DeviceUUID).
+	UUID        string
 	LegacyToken string // accepted instead of the pairing code; "" if none
 	// Problem explains why an existing identity was rejected, if it was.
 	Problem string
@@ -59,6 +61,8 @@ type ClaimInfo struct {
 	PublicKey    string `json:"public_key"`
 	AgeRecipient string `json:"age_recipient"`
 	HardwareID   string `json:"hardware_id"`
+	// UUID is the device's permanent UUID, for stickers and inventories.
+	UUID string `json:"uuid,omitempty"`
 	// NeedsCode is false when the device can be claimed with its API token.
 	NeedsCode bool `json:"needs_code"`
 	// NeedsSettings is true on official firmware: the claim must bring the
@@ -125,6 +129,7 @@ func (c *Claimer) info(w http.ResponseWriter, r *http.Request) {
 		PublicKey:     c.Identity.PublicKey(),
 		AgeRecipient:  c.Identity.Age.Recipient().String(),
 		HardwareID:    c.HardwareID,
+		UUID:          c.UUID,
 		NeedsCode:     c.LegacyToken == "",
 		NeedsSettings: c.Verifier == nil,
 		Problem:       c.Problem,

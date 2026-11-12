@@ -139,8 +139,12 @@ func main() {
 	if hw == "" {
 		logger.Print("WARNING: this board exposes no hardware serial, so its identity can't be bound to it")
 	}
+	deviceUUID, err := ident.UUID(hw)
+	if err != nil {
+		logger.Printf("device UUID: %v", err) // not fatal: the device works without one
+	}
 	claimer := &agent.Claimer{
-		Identity: ident, Verifier: verifier, HardwareID: hw, LegacyToken: cfg.APIToken,
+		Identity: ident, Verifier: verifier, HardwareID: hw, UUID: deviceUUID, LegacyToken: cfg.APIToken,
 		GokrazyPasswordPath: "/perm/gokr-pw.txt", Log: logger,
 		SaveSettings: func(s config.Settings) error { return saveSettings(settingsPath, s) },
 		// Restart to run with the new identity (see the end of main).
@@ -249,7 +253,7 @@ func main() {
 	}
 
 	api := &agent.API{
-		Sup: sup, Upd: upd, Logs: logs, Metrics: metrics, Token: token, Device: name,
+		Sup: sup, Upd: upd, Logs: logs, Metrics: metrics, Token: token, Device: name, UUID: deviceUUID,
 		Sign: sign, Claim: claimer, Firmware: fw, Verifier: fwVerifier,
 		Gokrazy: agent.NewGokrazyProxy(),
 		Settings: &agent.SettingsStore{

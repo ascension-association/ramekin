@@ -93,3 +93,9 @@ body.logs-open main { padding-bottom: calc(min(45vh, 420px) + 40px); }
 .logs-body { flex: 1; overflow: auto; padding: 8px clamp(16px, 4vw, 40px); background: var(--page); font: 12.5px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; }
 .logs-body:focus-visible { outline: 2px solid var(--accent); outline-offset: -2px; }
 .logs-body .line { white-space: pre; min-height: 1.45em; }
+.qr-btn { margin-top: 8px; padding: 4px 12px; font-size: 13px; }
+.label { flex-basis: 100%; margin: 0; display: flex; flex-wrap: wrap; align-items: center; gap: 12px; }
+.label img { background: #fff; border-radius: 6px; padding: 6px; }
+.label figcaption { display: flex; flex-direction: column; gap: 8px; align-items: flex-start; }
+.label a { color: var(--accent); }
+.label button { padding: 4px 12px; font-size: 13px; }

@@ -10,6 +10,7 @@ require (
 	github.com/sylabs/sif/v2 v2.24.2
 	golang.org/x/sys v0.49.0
 	gopkg.in/yaml.v3 v3.0.1
+	rsc.io/qr v0.2.0
 )
 
 require (

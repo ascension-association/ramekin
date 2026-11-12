@@ -135,8 +135,11 @@ type deviceRecord struct {
 	// Set when the device is claimed (`ramekin device claim`): its signing
 	// key, which every answer from it must be signed with, and the rest of
 	// its identity.
-	PublicKey       string `json:"public_key,omitempty"`
-	HardwareID      string `json:"hardware_id,omitempty"`
+	PublicKey  string `json:"public_key,omitempty"`
+	HardwareID string `json:"hardware_id,omitempty"`
+	// UUID is the device's permanent UUID (identity.DeviceUUID), for
+	// stickers and inventories.
+	UUID            string `json:"uuid,omitempty"`
 	AgeRecipient    string `json:"age_recipient,omitempty"`
 	GokrazyPassword string `json:"gokrazy_password,omitempty"`
 
@@ -238,7 +241,7 @@ func (d *deviceRecord) do(ctx context.Context, method, path string, body io.Read
 
 func cmdDevice(ctx context.Context, args []string) error {
 	if len(args) == 0 {
-		return errors.New("usage: ramekin device init|claim|release|install|set|update|find|list ...")
+		return errors.New("usage: ramekin device init|claim|release|install|set|update|find|list|label ...")
 	}
 	switch args[0] {
 	case "init":
@@ -255,6 +258,8 @@ func cmdDevice(ctx context.Context, args []string) error {
 		return deviceUpdate(ctx, args[1:])
 	case "find":
 		return deviceFind(ctx, args[1:])
+	case "label":
+		return deviceLabel(ctx, args[1:])
 	case "list":
 		p, err := loadProject()
 		if err != nil {
@@ -264,7 +269,7 @@ func cmdDevice(ctx context.Context, args []string) error {
 		for _, e := range ents {
 			name := strings.TrimSuffix(e.Name(), ".json")
 			if r, err := resolveDevice(p, name); err == nil {
-				fmt.Printf("%-20s %s\n", name, r.URL)
+				fmt.Printf("%-20s %-36s  %s\n", name, firstNonEmpty(recordUUID(r), "-"), r.URL)
 			}
 		}
 		return nil

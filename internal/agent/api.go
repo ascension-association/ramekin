@@ -30,6 +30,8 @@ type API struct {
 	Metrics *Sampler // optional
 	Token   string
 	Device  string
+	// UUID is the device's permanent UUID, reported in its status.
+	UUID string
 
 	// Sign, once the device is claimed, signs response bodies with its
 	// identity key, so the workstation knows which device answered.
@@ -145,6 +147,7 @@ func (a *API) status(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	s.Nonce = r.URL.Query().Get("nonce")
+	s.UUID = a.UUID
 	if a.Gokrazy != nil {
 		s.Features = append(s.Features, FeatureGokrazy)
 	}

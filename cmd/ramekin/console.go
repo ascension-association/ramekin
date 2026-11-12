@@ -23,6 +23,7 @@ import (
 
 	"github.com/ascension-association/ramekin/internal/agent"
 	"github.com/ascension-association/ramekin/internal/config"
+	"github.com/ascension-association/ramekin/internal/identity"
 )
 
 //go:embed console
@@ -50,6 +51,9 @@ type fleetDevice struct {
 	// GokrazyNote says how, or why not. Passwords never go to the page.
 	Gokrazy     bool   `json:"gokrazy"`
 	GokrazyNote string `json:"gokrazy_note,omitempty"`
+	// UUID is the device's permanent UUID, as it reports it or as derived
+	// from its hardware ID.
+	UUID string `json:"uuid,omitempty"`
 }
 
 type console struct {
@@ -148,6 +152,7 @@ func (c *console) handler(addr string) http.Handler {
 	})
 	mux.HandleFunc("POST /api/devices/{name}/switch", c.switchVersion)
 	mux.HandleFunc("POST /api/devices/{name}/gokrazy", c.openGokrazy)
+	mux.HandleFunc("GET /api/devices/{name}/label.svg", c.label)
 	mux.HandleFunc("GET /api/devices/{name}/logs", c.logs)
 	return c.guard(addr, mux)
 }
@@ -263,7 +268,35 @@ func (c *console) poll(ctx context.Context, name string) {
 		features = row.Status.Features
 	}
 	row.Gokrazy, row.GokrazyNote = gokrazyInfo(c.p, d, features)
+	row.UUID = recordUUID(d)
+	if row.Status != nil && identity.ValidUUID(row.Status.UUID) {
+		row.UUID = row.Status.UUID
+	}
 	c.devices[name] = &row
+}
+
+// label serves a device's sticker: a QR code of its UUID (see `ramekin
+// device label`).
+func (c *console) label(w http.ResponseWriter, r *http.Request) {
+	name := r.PathValue("name")
+	c.mu.Lock()
+	row := c.devices[name]
+	u := ""
+	if row != nil {
+		u = row.UUID
+	}
+	c.mu.Unlock()
+	if row == nil {
+		http.Error(w, "unknown device", http.StatusNotFound)
+		return
+	}
+	svg, err := labelSVG(u, name, 30)
+	if err != nil {
+		http.Error(w, name+" has no UUID yet: its ramekind is older than this dashboard, or it hasn't answered", http.StatusNotFound)
+		return
+	}
+	w.Header().Set("Content-Type", "image/svg+xml")
+	io.WriteString(w, svg)
 }
 
 // fetchStatus asks a device for its status. If it doesn't answer and its MAC

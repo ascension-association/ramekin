@@ -201,7 +201,9 @@ func receive(r io.Reader, dir string, limit int64) (path, sum string, n int64, e
 
 // DeviceStatus is what a device reports (API /v1/status and update.status_url).
 type DeviceStatus struct {
-	Device    string          `json:"device"`
+	Device string `json:"device"`
+	// UUID is the device's permanent UUID (identity.DeviceUUID).
+	UUID      string          `json:"uuid,omitempty"`
 	Arch      string          `json:"arch"`
 	Channel   string          `json:"channel"`
 	Current   *Release        `json:"current,omitempty"`
