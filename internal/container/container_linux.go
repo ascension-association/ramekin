@@ -40,6 +40,9 @@ type spec struct {
 	Env         []string
 	Binds       []config.Bind
 	TmpfsSizeMB int
+	// HostFilesDir is the directory mirroring the host's resolv.conf and
+	// hosts (see hostMirror).
+	HostFilesDir string
 }
 
 // MaybeInit must be called first thing in main. When the process was started
@@ -99,6 +102,10 @@ func (r *Runtime) Start(image string) (*Process, error) {
 		}
 		s.Binds = append(s.Binds, bind)
 	}
+	if err := defaultHostMirror.ensure(); err != nil {
+		return nil, fmt.Errorf("mirroring host files: %w", err)
+	}
+	s.HostFilesDir = defaultHostMirror.dir
 	if s.StateDir, err = os.MkdirTemp("", "ramekin-ctr-"); err != nil {
 		return nil, err
 	}

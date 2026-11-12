@@ -162,28 +162,33 @@ func populate(root string, s *spec) error {
 		}
 	}
 
-	binds := s.Binds
-	for _, f := range []string{"/etc/resolv.conf", "/etc/hosts"} {
-		if src, err := filepath.EvalSymlinks(f); err == nil {
-			binds = append(binds, config.Bind{Src: src, Dst: f, ReadOnly: true})
-		}
-	}
-	for _, b := range binds {
-		st, err := os.Stat(b.Src)
-		if err != nil {
-			return fmt.Errorf("bind %s: %w", b.Src, err)
-		}
-		dst, err := target(root, b.Dst, st.IsDir())
-		if err != nil {
+	for _, b := range s.Binds {
+		if err := bindMount(root, b); err != nil {
 			return err
 		}
-		if err := unix.Mount(b.Src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
-			return fmt.Errorf("bind %s to %s: %w", b.Src, b.Dst, err)
-		}
-		if b.ReadOnly {
-			if err := unix.Mount("", dst, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
-				return fmt.Errorf("remount %s read-only: %w", b.Dst, err)
-			}
+	}
+	if s.HostFilesDir != "" {
+		return linkHostFiles(root, s.HostFilesDir, s.Binds)
+	}
+	return nil
+}
+
+// bindMount binds b.Src at b.Dst inside root, read-only if b says so.
+func bindMount(root string, b config.Bind) error {
+	st, err := os.Stat(b.Src)
+	if err != nil {
+		return fmt.Errorf("bind %s: %w", b.Src, err)
+	}
+	dst, err := target(root, b.Dst, st.IsDir())
+	if err != nil {
+		return err
+	}
+	if err := unix.Mount(b.Src, dst, "", unix.MS_BIND|unix.MS_REC, ""); err != nil {
+		return fmt.Errorf("bind %s to %s: %w", b.Src, b.Dst, err)
+	}
+	if b.ReadOnly {
+		if err := unix.Mount("", dst, "", unix.MS_BIND|unix.MS_REMOUNT|unix.MS_RDONLY, ""); err != nil {
+			return fmt.Errorf("remount %s read-only: %w", b.Dst, err)
 		}
 	}
 	return nil
