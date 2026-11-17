@@ -207,7 +207,7 @@ function card(d) {
   const qr = labels.get(d.name);
   if (qr) {
     actions.append(el("figure", { class: "label" },
-      el("img", { src: qr.svg, alt: `QR code of ${d.name}'s ID, ${d.short_id}`, width: "270" }),
+      el("img", { src: qr.png, alt: `QR code of ${d.name}'s ID, ${d.short_id}`, width: "270" }),
       el("figcaption", {},
         el("a", { href: qr.svg, download: `${d.name}-label.svg` }, "Download SVG"),
         el("a", { href: qr.png, download: `${d.name}-label.png` }, "Download PNG"),
@@ -397,9 +397,9 @@ async function openGokrazy(name) {
 }
 
 // The device's sticker, as made by `ramekin device label`, as an SVG and a
-// PNG (1.5 x 0.75 in at 300 dpi). It's shown as an image (scripts in an SVG
-// image never run) from a data: URL, which the console's CSP allows for
-// images.
+// PNG (1.5 x 0.75 in at 300 dpi). The PNG is shown, so it looks the same in
+// every browser; both can be downloaded. They're data: URLs, which the
+// console's CSP allows for images.
 async function labelURL(name, format) {
   const r = await fetch(`/api/devices/${encodeURIComponent(name)}/label.${format}`, { headers: { "X-Ramekin-Console": key } });
   if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
