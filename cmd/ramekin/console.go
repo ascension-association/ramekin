@@ -153,7 +153,8 @@ func (c *console) handler(addr string) http.Handler {
 	})
 	mux.HandleFunc("POST /api/devices/{name}/switch", c.switchVersion)
 	mux.HandleFunc("POST /api/devices/{name}/gokrazy", c.openGokrazy)
-	mux.HandleFunc("GET /api/devices/{name}/label.svg", c.label)
+	mux.HandleFunc("GET /api/devices/{name}/label.svg", c.label("svg"))
+	mux.HandleFunc("GET /api/devices/{name}/label.png", c.label("png"))
 	mux.HandleFunc("GET /api/devices/{name}/logs", c.logs)
 	return c.guard(addr, mux)
 }
@@ -277,9 +278,13 @@ func (c *console) poll(ctx context.Context, name string) {
 	c.devices[name] = &row
 }
 
-// label serves a device's sticker: a QR code of its short ID (see `ramekin
-// device label`).
-func (c *console) label(w http.ResponseWriter, r *http.Request) {
+// label serves a device's sticker, as label.svg or label.png: a QR code of
+// its short ID (see `ramekin device label`).
+func (c *console) label(format string) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) { c.serveLabel(w, r, format) }
+}
+
+func (c *console) serveLabel(w http.ResponseWriter, r *http.Request, format string) {
 	name := r.PathValue("name")
 	c.mu.Lock()
 	row := c.devices[name]
@@ -292,9 +297,24 @@ func (c *console) label(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown device", http.StatusNotFound)
 		return
 	}
-	svg, err := labelSVG(u, mustLabelSize(defaultLabelSize, 300))
-	if err != nil {
+	if identity.ShortID(u) == "" {
 		http.Error(w, name+" has no UUID yet: its ramekind is older than this dashboard, or it hasn't answered", http.StatusNotFound)
+		return
+	}
+	size := mustLabelSize(defaultLabelSize, 300)
+	if format == "png" {
+		b, err := labelPNG(u, size)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set("Content-Type", "image/png")
+		w.Write(b)
+		return
+	}
+	svg, err := labelSVG(u, size)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Header().Set("Content-Type", "image/svg+xml")

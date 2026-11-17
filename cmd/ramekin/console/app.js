@@ -19,7 +19,7 @@ const ORDER = ["unhealthy", "offline", "warning", "updating", "idle", "healthy"]
 const confirming = new Map(); // name -> sha of the release to switch to
 const pending = new Map(); // name -> version being switched to
 const messages = new Map(); // name -> {ok, text}
-const labels = new Map(); // name -> data: URL of the device's label SVG, while shown
+const labels = new Map(); // name -> {svg, png}: data: URLs of the device's label, while shown
 
 let pollMs = 5000;
 
@@ -207,9 +207,10 @@ function card(d) {
   const qr = labels.get(d.name);
   if (qr) {
     actions.append(el("figure", { class: "label" },
-      el("img", { src: qr, alt: `QR code of ${d.name}'s ID, ${d.short_id}`, width: "270" }),
+      el("img", { src: qr.svg, alt: `QR code of ${d.name}'s ID, ${d.short_id}`, width: "270" }),
       el("figcaption", {},
-        el("a", { href: qr, download: `${d.name}-label.svg` }, "Download SVG"),
+        el("a", { href: qr.svg, download: `${d.name}-label.svg` }, "Download SVG"),
+        el("a", { href: qr.png, download: `${d.name}-label.png` }, "Download PNG"),
         el("button", { type: "button", onclick: () => { labels.delete(d.name); render(); } }, "Hide"))));
   }
 
@@ -395,15 +396,26 @@ async function openGokrazy(name) {
   }
 }
 
-// The device's sticker, as made by `ramekin device label`. It's shown as an
-// image (scripts in an SVG image never run) from a data: URL, which the
-// console's CSP allows for images.
+// The device's sticker, as made by `ramekin device label`, as an SVG and a
+// PNG (1.5 x 0.75 in at 300 dpi). It's shown as an image (scripts in an SVG
+// image never run) from a data: URL, which the console's CSP allows for
+// images.
+async function labelURL(name, format) {
+  const r = await fetch(`/api/devices/${encodeURIComponent(name)}/label.${format}`, { headers: { "X-Ramekin-Console": key } });
+  if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
+  const blob = await r.blob();
+  return new Promise((resolve, reject) => {
+    const fr = new FileReader();
+    fr.onload = () => resolve(fr.result);
+    fr.onerror = () => reject(fr.error);
+    fr.readAsDataURL(blob);
+  });
+}
+
 async function showLabel(name) {
   try {
-    const r = await fetch(`/api/devices/${encodeURIComponent(name)}/label.svg`, { headers: { "X-Ramekin-Console": key } });
-    if (!r.ok) throw new Error((await r.text()).trim() || r.statusText);
-    const svg = await r.text();
-    labels.set(name, "data:image/svg+xml;base64," + btoa(unescape(encodeURIComponent(svg))));
+    const [svg, png] = await Promise.all([labelURL(name, "svg"), labelURL(name, "png")]);
+    labels.set(name, { svg, png });
   } catch (e) {
     messages.set(name, { ok: false, text: `Couldn't show ${name}'s QR code: ${e.message}` });
   }

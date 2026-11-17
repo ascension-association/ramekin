@@ -1,15 +1,28 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
 	"errors"
 	"fmt"
+	"hash/crc32"
+	"image"
+	"image/color"
+	"image/draw"
+	"image/png"
 	"math"
 	"os"
+	"path/filepath"
+	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"golang.org/x/image/font"
+	"golang.org/x/image/font/gofont/gomonobold"
+	"golang.org/x/image/font/opentype"
+	"golang.org/x/image/math/fixed"
 	"rsc.io/qr"
 
 	"github.com/ascension-association/ramekin/internal/config"
@@ -43,10 +56,12 @@ func deviceUUID(ctx context.Context, d *deviceRecord) (string, error) {
 }
 
 // deviceLabel writes a sticker for a device: a QR code of its short ID (see
-// identity.ShortID), with the short ID printed under it.
+// identity.ShortID), with the short ID printed beside or under it, as an
+// SVG or a PNG.
 func deviceLabel(ctx context.Context, args []string) error {
 	fl := flags("device label")
-	out := fl.String("o", "", "output file (default <device>-label.svg)")
+	out := fl.String("o", "", "output file (default <device>-label.svg, or .png with -format png)")
+	format := fl.String("format", "", "svg or png (default: from -o's extension, else svg)")
 	sizeArg := fl.String("size", defaultLabelSize, "label size, width x height, in in or mm (e.g. 1.5x0.75in, 38x19mm)")
 	dpi := fl.Int("dpi", 300, "printer resolution: the QR code's modules are made whole printer dots")
 	pos, err := parse(fl, args)
@@ -54,7 +69,16 @@ func deviceLabel(ctx context.Context, args []string) error {
 		return err
 	}
 	if len(pos) != 1 {
-		return errors.New("usage: ramekin device label <device> [-o file.svg] [-size WxH(in|mm)] [-dpi N]")
+		return errors.New("usage: ramekin device label <device> [-o file.svg|file.png] [-format svg|png] [-size WxH(in|mm)] [-dpi N]")
+	}
+	if *format == "" {
+		*format = "svg"
+		if strings.EqualFold(filepath.Ext(*out), ".png") {
+			*format = "png"
+		}
+	}
+	if *format != "svg" && *format != "png" {
+		return fmt.Errorf("-format %q: want svg or png", *format)
 	}
 	size, err := parseLabelSize(*sizeArg, *dpi)
 	if err != nil {
@@ -72,15 +96,22 @@ func deviceLabel(ctx context.Context, args []string) error {
 	if err != nil {
 		return err
 	}
-	svg, err := labelSVG(u, size)
+	var data []byte
+	if *format == "png" {
+		data, err = labelPNG(u, size)
+	} else {
+		var svg string
+		svg, err = labelSVG(u, size)
+		data = []byte(svg)
+	}
 	if err != nil {
 		return err
 	}
 	warnShortIDClash(p, pos[0], u)
 	if *out == "" {
-		*out = pos[0] + "-label.svg"
+		*out = pos[0] + "-label." + *format
 	}
-	if err := os.WriteFile(*out, []byte(svg), 0o644); err != nil {
+	if err := os.WriteFile(*out, data, 0o644); err != nil {
 		return err
 	}
 	fmt.Printf("%s  %s  (UUID %s)\nwrote %s\n", pos[0], identity.ShortID(u), u, *out)
@@ -158,21 +189,34 @@ func qrPath(c *qr.Code, m, x, y int) string {
 // qrQuiet is the margin a QR code needs around it, in modules.
 const qrQuiet = 4
 
-// labelSVG lays out a sticker for the device with UUID u: a QR code of its
+// labelLayout is where a sticker's parts go, in printer dots.
+type labelLayout struct {
+	id, uuid string
+	size     labelSize
+	code     *qr.Code
+	m        int // module size
+	qx, qy   int // top left of the code itself (inside its quiet zone)
+	lines    []string
+	textX    float64 // centre of the lines
+	baseline float64 // of the first line
+	fontSize float64
+}
+
+// layOutLabel lays out a sticker for the device with UUID u: a QR code of its
 // short ID, which fits the smallest QR code, and the short ID in large type.
 // On a wide label (such as the default 1.5 x 0.75 in) the ID is to the right
 // of the code, on two lines; otherwise it's under it. The code's modules are
 // whole printer dots, so it prints sharp. The device's name isn't on it:
 // names can change, and the short ID identifies the device.
-func labelSVG(u string, l labelSize) (string, error) {
+func layOutLabel(u string, l labelSize) (*labelLayout, error) {
 	id := identity.ShortID(u)
 	if id == "" {
-		return "", fmt.Errorf("%q isn't a UUID", u)
+		return nil, fmt.Errorf("%q isn't a UUID", u)
 	}
 	// Q: a quarter of the code can be scratched off a sticker and it still scans.
 	c, err := qr.Encode(id, qr.Q)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	modules := c.Size + 2*qrQuiet
 	wide := l.W*2 >= l.H*3 // 1.5 x 0.75 in is 2:1
@@ -189,13 +233,13 @@ func labelSVG(u string, l labelSize) (string, error) {
 	} else {
 		m = min(l.W, l.H*3/4) / modules
 		qx, qy = (l.W-m*modules)/2, 0
-		textX, textW = 0, float64(l.W)*0.92
+		textW = float64(l.W) * 0.92
 		textY, textH = float64(m*modules), float64(l.H-m*modules)
 		lines = []string{id}
 		textX = (float64(l.W) - textW) / 2
 	}
 	if m < 1 {
-		return "", fmt.Errorf("the label is too small for a QR code at %d dpi", l.DPI)
+		return nil, fmt.Errorf("the label is too small for a QR code at %d dpi", l.DPI)
 	}
 	// The ID as large as fits its area: monospace glyphs are about 0.6em
 	// wide, and lines are 1.15em apart.
@@ -205,23 +249,104 @@ func labelSVG(u string, l labelSize) (string, error) {
 	}
 	fontSize := min(textW/(0.6*float64(longest)), textH*0.85/(1.15*float64(len(lines))))
 	if fontSize < 4 {
-		return "", errors.New("the label is too small to print the ID legibly")
+		return nil, errors.New("the label is too small to print the ID legibly")
 	}
 	block := fontSize * 1.15 * float64(len(lines))
-	baseline := textY + (textH-block)/2 + fontSize*0.9
+	return &labelLayout{
+		id: id, uuid: u, size: l, code: c, m: m,
+		qx: qx + qrQuiet*m, qy: qy + qrQuiet*m,
+		lines: lines, textX: textX + textW/2,
+		baseline: textY + (textH-block)/2 + fontSize*0.9,
+		fontSize: fontSize,
+	}, nil
+}
+
+// labelSVG draws the sticker for the device with UUID u (see layOutLabel).
+func labelSVG(u string, l labelSize) (string, error) {
+	lo, err := layOutLabel(u, l)
+	if err != nil {
+		return "", err
+	}
 	var b strings.Builder
 	// White behind everything, in two ways: some viewers ignore one or the
 	// other (a percentage-sized rect came out a fraction of the label).
 	fmt.Fprintf(&b, `<svg xmlns="http://www.w3.org/2000/svg" width="%s" height="%s" viewBox="0 0 %d %d" style="background-color:#fff">`+"\n", l.svgLength(l.W), l.svgLength(l.H), l.W, l.H)
-	fmt.Fprintf(&b, "<title>%s (UUID %s)</title>\n", id, u)
+	fmt.Fprintf(&b, "<title>%s (UUID %s)</title>\n", lo.id, u)
 	fmt.Fprintf(&b, `<rect x="0" y="0" width="%d" height="%d" fill="#fff"/>`+"\n", l.W, l.H)
-	fmt.Fprintf(&b, `<path fill="#000" shape-rendering="crispEdges" d="%s"/>`+"\n", qrPath(c, m, qx+qrQuiet*m, qy+qrQuiet*m))
-	for i, s := range lines {
+	fmt.Fprintf(&b, `<path fill="#000" shape-rendering="crispEdges" d="%s"/>`+"\n", qrPath(lo.code, lo.m, lo.qx, lo.qy))
+	for i, s := range lo.lines {
 		fmt.Fprintf(&b, `<text x="%.1f" y="%.1f" font-size="%.1f" font-weight="bold" font-family="monospace" text-anchor="middle" fill="#000">%s</text>`+"\n",
-			textX+textW/2, baseline+float64(i)*fontSize*1.15, fontSize, s)
+			lo.textX, lo.baseline+float64(i)*lo.fontSize*1.15, lo.fontSize, s)
 	}
 	b.WriteString("</svg>\n")
 	return b.String(), nil
+}
+
+// labelPNG draws the sticker for the device with UUID u (see layOutLabel) as
+// a black and white PNG, one pixel per printer dot, that says its resolution,
+// so it prints at the label's size. The ID is in Go Mono Bold.
+func labelPNG(u string, l labelSize) ([]byte, error) {
+	lo, err := layOutLabel(u, l)
+	if err != nil {
+		return nil, err
+	}
+	img := image.NewPaletted(image.Rect(0, 0, l.W, l.H), color.Palette{color.White, color.Black})
+	black := image.NewUniform(color.Black)
+	for row := 0; row < lo.code.Size; row++ {
+		for col := 0; col < lo.code.Size; col++ {
+			if lo.code.Black(col, row) {
+				x, y := lo.qx+col*lo.m, lo.qy+row*lo.m
+				draw.Draw(img, image.Rect(x, y, x+lo.m, y+lo.m), black, image.Point{}, draw.Src)
+			}
+		}
+	}
+	face, err := opentype.NewFace(labelFont, &opentype.FaceOptions{Size: lo.fontSize, DPI: 72, Hinting: font.HintingFull})
+	if err != nil {
+		return nil, err
+	}
+	defer face.Close()
+	// Antialiased into a mask, then made black or white: label printers
+	// have no greys, and dither any they're sent.
+	mask := image.NewAlpha(img.Bounds())
+	d := font.Drawer{Dst: mask, Src: image.Opaque, Face: face}
+	for i, s := range lo.lines {
+		w := float64(d.MeasureString(s)) / 64
+		d.Dot = fixed.Point26_6{X: fixed.Int26_6((lo.textX - w/2) * 64), Y: fixed.Int26_6((lo.baseline + float64(i)*lo.fontSize*1.15) * 64)}
+		d.DrawString(s)
+	}
+	for i, a := range mask.Pix {
+		if a >= 0x80 {
+			img.Pix[i] = 1
+		}
+	}
+	var b bytes.Buffer
+	if err := png.Encode(&b, img); err != nil {
+		return nil, err
+	}
+	return withPNGResolution(b.Bytes(), l.DPI), nil
+}
+
+// labelFont is Go Mono Bold, which, like the SVG's monospace, is 0.6em wide.
+var labelFont = func() *opentype.Font {
+	f, err := opentype.Parse(gomonobold.TTF)
+	if err != nil {
+		panic(err)
+	}
+	return f
+}()
+
+// withPNGResolution adds a pHYs chunk, saying the image is dpi pixels per
+// inch, after a PNG's IHDR chunk (which image/png doesn't write).
+func withPNGResolution(p []byte, dpi int) []byte {
+	const ihdrEnd = 8 + 4 + 4 + 13 + 4 // signature, then IHDR's length, type, data, CRC
+	ppm := uint32(math.Round(float64(dpi) / 0.0254))
+	chunk := binary.BigEndian.AppendUint32(nil, 9)
+	chunk = append(chunk, "pHYs"...)
+	chunk = binary.BigEndian.AppendUint32(chunk, ppm)
+	chunk = binary.BigEndian.AppendUint32(chunk, ppm)
+	chunk = append(chunk, 1) // the unit is the metre
+	chunk = binary.BigEndian.AppendUint32(chunk, crc32.ChecksumIEEE(chunk[4:]))
+	return slices.Concat(p[:ihdrEnd], chunk, p[ihdrEnd:])
 }
 
 // warnShortIDClash warns if another device in the project has the same

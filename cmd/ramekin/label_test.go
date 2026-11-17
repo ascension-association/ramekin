@@ -1,6 +1,9 @@
 package main
 
 import (
+	"bytes"
+	"encoding/binary"
+	"image/png"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -95,6 +98,49 @@ func TestLabelSVG(t *testing.T) {
 	}
 }
 
+func TestLabelPNG(t *testing.T) {
+	const u, id = "b8eafc38-a150-5c76-a06e-93a1fe3cccde", "Q3NFR-E51A1"
+	b, err := labelPNG(u, mustLabelSize(defaultLabelSize, 300))
+	if err != nil {
+		t.Fatal(err)
+	}
+	img, err := png.Decode(bytes.NewReader(b))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// 1.5 x 0.75 in at 300 dpi, and it says so: 300 dpi is 11811 dots per metre.
+	if got := img.Bounds().Size(); got.X != 450 || got.Y != 225 {
+		t.Errorf("PNG is %v, want 450x225", got)
+	}
+	i := bytes.Index(b, []byte("pHYs"))
+	if i < 0 || binary.BigEndian.Uint32(b[i+4:]) != 11811 || binary.BigEndian.Uint32(b[i+8:]) != 11811 || b[i+12] != 1 {
+		t.Errorf("PNG has no 300 dpi pHYs chunk")
+	}
+	if _, err := labelPNG("not-a-uuid", mustLabelSize(defaultLabelSize, 300)); err == nil {
+		t.Error("made a label for something that isn't a UUID")
+	}
+
+	decode, err := exec.LookPath("zbarimg")
+	if err != nil {
+		t.Skip("zbarimg not installed; skipping the scan check")
+	}
+	for _, c := range []struct {
+		size string
+		dpi  int
+	}{{defaultLabelSize, 300}, {defaultLabelSize, 203}, {"1x1in", 300}, {"25x40mm", 300}} {
+		b, err := labelPNG(u, mustLabelSize(c.size, c.dpi))
+		if err != nil {
+			t.Fatalf("%s at %d dpi: %v", c.size, c.dpi, err)
+		}
+		f := filepath.Join(t.TempDir(), "l.png")
+		os.WriteFile(f, b, 0o644)
+		out, err := exec.Command(decode, "-q", "--raw", f).Output()
+		if err != nil || strings.TrimSpace(string(out)) != id {
+			t.Errorf("%s at %d dpi: scanning gave %q, %v; want %s", c.size, c.dpi, out, err, id)
+		}
+	}
+}
+
 func TestRecordUUID(t *testing.T) {
 	derived := identity.DeviceUUID("dt:119ef33bdeceb626")
 	for _, c := range []struct {
@@ -141,5 +187,12 @@ func TestConsoleLabel(t *testing.T) {
 	w := get("/api/devices/pi/label.svg", "k")
 	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/svg+xml" || !strings.Contains(w.Body.String(), ">E51A1<") {
 		t.Fatalf("label: %d %s\n%s", w.Code, w.Header().Get("Content-Type"), w.Body.String())
+	}
+	w = get("/api/devices/pi/label.png", "k")
+	if w.Code != http.StatusOK || w.Header().Get("Content-Type") != "image/png" || !bytes.HasPrefix(w.Body.Bytes(), []byte("\x89PNG")) {
+		t.Fatalf("PNG label: %d %s", w.Code, w.Header().Get("Content-Type"))
+	}
+	if w := get("/api/devices/pi/label.gif", "k"); w.Code != http.StatusNotFound {
+		t.Fatalf("GIF label: %d", w.Code)
 	}
 }
