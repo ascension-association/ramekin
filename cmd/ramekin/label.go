@@ -8,7 +8,6 @@ import (
 	"fmt"
 	"hash/crc32"
 	"image"
-	"image/color"
 	"image/draw"
 	"image/png"
 	"math"
@@ -283,41 +282,35 @@ func labelSVG(u string, l labelSize) (string, error) {
 }
 
 // labelPNG draws the sticker for the device with UUID u (see layOutLabel) as
-// a black and white PNG, one pixel per printer dot, that says its resolution,
-// so it prints at the label's size. The ID is in Go Mono Bold.
+// a greyscale PNG, one pixel per printer dot, that says its resolution, so it
+// prints at the label's size. The QR code is pure black on white, its modules
+// whole dots; the ID, in Go Mono Bold, is antialiased, so its edges are smooth
+// (a printer dithers the thin grey rim, which at 300 dpi doesn't show).
 func labelPNG(u string, l labelSize) ([]byte, error) {
 	lo, err := layOutLabel(u, l)
 	if err != nil {
 		return nil, err
 	}
-	img := image.NewPaletted(image.Rect(0, 0, l.W, l.H), color.Palette{color.White, color.Black})
-	black := image.NewUniform(color.Black)
+	img := image.NewGray(image.Rect(0, 0, l.W, l.H))
+	draw.Draw(img, img.Bounds(), image.White, image.Point{}, draw.Src)
 	for row := 0; row < lo.code.Size; row++ {
 		for col := 0; col < lo.code.Size; col++ {
 			if lo.code.Black(col, row) {
 				x, y := lo.qx+col*lo.m, lo.qy+row*lo.m
-				draw.Draw(img, image.Rect(x, y, x+lo.m, y+lo.m), black, image.Point{}, draw.Src)
+				draw.Draw(img, image.Rect(x, y, x+lo.m, y+lo.m), image.Black, image.Point{}, draw.Src)
 			}
 		}
 	}
-	face, err := opentype.NewFace(labelFont, &opentype.FaceOptions{Size: lo.fontSize, DPI: 72, Hinting: font.HintingFull})
+	face, err := opentype.NewFace(labelFont, &opentype.FaceOptions{Size: lo.fontSize, DPI: 72, Hinting: font.HintingNone})
 	if err != nil {
 		return nil, err
 	}
 	defer face.Close()
-	// Antialiased into a mask, then made black or white: label printers
-	// have no greys, and dither any they're sent.
-	mask := image.NewAlpha(img.Bounds())
-	d := font.Drawer{Dst: mask, Src: image.Opaque, Face: face}
+	d := font.Drawer{Dst: img, Src: image.Black, Face: face}
 	for i, s := range lo.lines {
 		w := float64(d.MeasureString(s)) / 64
 		d.Dot = fixed.Point26_6{X: fixed.Int26_6((lo.textX - w/2) * 64), Y: fixed.Int26_6((lo.baseline + float64(i)*lo.fontSize*1.15) * 64)}
 		d.DrawString(s)
-	}
-	for i, a := range mask.Pix {
-		if a >= 0x80 {
-			img.Pix[i] = 1
-		}
 	}
 	var b bytes.Buffer
 	if err := png.Encode(&b, img); err != nil {
