@@ -29,6 +29,7 @@ import (
 	"github.com/ascension-association/ramekin/internal/container"
 	"github.com/ascension-association/ramekin/internal/identity"
 	"github.com/ascension-association/ramekin/internal/keys"
+	"github.com/ascension-association/ramekin/internal/netbridge"
 	"github.com/ascension-association/ramekin/internal/release"
 	"github.com/ascension-association/ramekin/internal/sifimg"
 )
@@ -38,10 +39,21 @@ func main() {
 	container.MaybeInit()
 
 	cfgPath := flag.String("config", config.DefaultDevicePath, "device configuration file")
+	bridge := flag.String("bridge", "", "keep the board's ethernet ports in a bridge, as NAME=PORT,PORT (e.g. br0=eth0,eth1); for firmware that runs its DHCP client on that bridge")
 	flag.Parse()
 
 	logs := agent.NewLogBuffer(os.Stdout, 2000)
 	logger := log.New(io.MultiWriter(logs), "ramekind: ", log.LstdFlags)
+
+	// First, before anything that can fail: the device has no network until
+	// the bridge exists, since its DHCP client waits for it.
+	if *bridge != "" {
+		spec, err := netbridge.Parse(*bridge)
+		if err != nil {
+			logger.Fatalf("-bridge: %v", err)
+		}
+		go netbridge.Keep(context.Background(), spec, logger.Printf)
+	}
 
 	cfg, err := config.LoadDevice(*cfgPath)
 	if err != nil {
